@@ -3237,6 +3237,98 @@ class TestAppleMailConnector:
         assert result[0]["sender"] == "sender@example.com"
         assert result[0]["read_status"] is False
 
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_search_messages_empty_mailbox_warns_about_local_sync(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        mock_run.return_value = (
+            '{"messages":[],"total":0,"account_type":"imap"}'
+        )
+        warnings: list[str] = []
+
+        result = connector._search_messages_applescript(
+            "Gmail", "INBOX", on_warning=warnings.append
+        )
+
+        assert result == []
+        assert len(warnings) == 1
+        assert "synchron" in warnings[0].lower()
+        assert "Gmail" in warnings[0]
+        assert "INBOX" in warnings[0]
+        assert "imap" in warnings[0].lower()
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_search_messages_no_filtered_matches_warns_with_total(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        mock_run.return_value = (
+            '{"messages":[],"total":50,"account_type":"imap"}'
+        )
+        warnings: list[str] = []
+
+        result = connector._search_messages_applescript(
+            "Gmail", "INBOX", on_warning=warnings.append
+        )
+
+        assert result == []
+        assert len(warnings) == 1
+        assert "50" in warnings[0]
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_search_messages_nonempty_result_does_not_warn(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        mock_run.return_value = (
+            '{"messages":[{"id":"1"},{"id":"2"},{"id":"3"}],'
+            '"total":50,"account_type":"imap"}'
+        )
+        on_warning = MagicMock()
+
+        result = connector._search_messages_applescript(
+            "Gmail", "INBOX", on_warning=on_warning
+        )
+
+        assert len(result) == 3
+        on_warning.assert_not_called()
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_search_messages_old_list_format_does_not_warn(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        mock_run.return_value = '[{"id":"1","subject":"Legacy"}]'
+        on_warning = MagicMock()
+
+        result = connector._search_messages_applescript(
+            "Gmail", "INBOX", on_warning=on_warning
+        )
+
+        assert result == [{"id": "1", "subject": "Legacy"}]
+        on_warning.assert_not_called()
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_search_messages_empty_new_format_without_warning_callback(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        mock_run.return_value = (
+            '{"messages":[],"total":0,"account_type":"imap"}'
+        )
+
+        assert connector._search_messages_applescript("Gmail", "INBOX") == []
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_search_messages_script_includes_quoted_search_metadata_keys(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        mock_run.return_value = "[]"
+
+        connector._search_messages_applescript("Gmail", "INBOX")
+
+        script = mock_run.call_args[0][0]
+        assert "|messages|:resultData" in script
+        assert "|total|:total" in script
+        assert "|account_type|:accountTypeValue" in script
+        assert "account type of accountRef" in script
+
     # Note: validates the Python-side JSON parse. Real end-to-end correctness
     # (AppleScript actually emitting valid JSON when the data contains '|')
     # is proven by integration tests.

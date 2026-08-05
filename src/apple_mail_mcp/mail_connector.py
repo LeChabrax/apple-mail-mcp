@@ -1901,6 +1901,7 @@ class AppleMailConnector:
                 body_contains,
                 text_contains,
                 received_within_hours=received_within_hours,
+                on_warning=on_warning,
             )
         finally:
             elapsed = time.perf_counter() - start
@@ -1929,6 +1930,7 @@ class AppleMailConnector:
         body_contains: str | None = None,
         text_contains: str | None = None,
         received_within_hours: int | None = None,
+        on_warning: Callable[[str], None] | None = None,
     ) -> list[dict[str, Any]]:
         """AppleScript path for search_messages (the universal baseline).
 
@@ -2088,6 +2090,12 @@ class AppleMailConnector:
         tell_body = f'''
         tell application "Mail"
             set accountRef to {account_clause}
+            set accountTypeValue to account type of accountRef
+            if accountTypeValue is missing value then
+                set accountTypeValue to ""
+            else
+                set accountTypeValue to accountTypeValue as text
+            end if
             set mailboxRef to my resolveMailbox(accountRef, "{mailbox_safe}")
             set msgs to messages of mailboxRef
             set total to count of msgs
@@ -2108,6 +2116,7 @@ class AppleMailConnector:
                     set matchCount to matchCount + 1
                 end if
             end repeat
+            set resultData to {{|messages|:resultData, |total|:total, |account_type|:accountTypeValue}}
         end tell
         '''
 
@@ -2117,7 +2126,30 @@ class AppleMailConnector:
             handlers=_MAILBOX_RESOLVER_HANDLERS,
         )
         result = self._run_applescript(script)
-        return cast(list[dict[str, Any]], parse_applescript_json(result))
+        parsed = parse_applescript_json(result)
+        if isinstance(parsed, list):
+            return cast(list[dict[str, Any]], parsed)
+
+        parsed_record = cast(dict[str, Any], parsed)
+        messages = cast(list[dict[str, Any]], parsed_record["messages"])
+        total = int(parsed_record["total"])
+        account_type = str(parsed_record.get("account_type") or "").strip()
+
+        if on_warning is not None:
+            if total == 0:
+                on_warning(
+                    f"Mail.app mailbox {mailbox!r} in account {account!r} contains "
+                    f"no messages locally (account type: {account_type or 'unknown'}); "
+                    "check Mail.app's local synchronization."
+                )
+            elif not messages:
+                on_warning(
+                    f"Mail.app found {total} messages in mailbox {mailbox!r} of "
+                    f"account {account!r}, but none matched the search criteria; "
+                    "check the filters if this was unexpected."
+                )
+
+        return messages
 
     def get_message(
         self,

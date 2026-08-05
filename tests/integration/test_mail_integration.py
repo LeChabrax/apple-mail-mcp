@@ -96,6 +96,21 @@ class TestMailIntegration:
         assert isinstance(result, list)
         # Mailbox might be empty, so just check type
 
+    def test_search_messages_empty_filtered_result_reports_local_state(
+        self, connector: AppleMailConnector, test_account: str
+    ) -> None:
+        """The AppleScript metadata envelope disambiguates an empty result."""
+        warnings: list[str] = []
+        result = connector._search_messages_applescript(
+            account=test_account,
+            mailbox="INBOX",
+            subject_contains="[apple-mail-fast-mcp-no-such-subject]",
+            on_warning=warnings.append,
+        )
+        assert result == []
+        assert len(warnings) == 1
+        assert "INBOX" in warnings[0]
+
     def test_search_unread_messages(
         self, connector: AppleMailConnector, test_account: str
     ) -> None:
