@@ -816,6 +816,10 @@ class AppleMailConnector:
         """
         self.timeout = timeout
         self._imap_pool = imap_pool
+        # Nom de la boite de reception par compte. Il ne change pas pendant la
+        # vie du processus, et chaque resolution coute un aller-retour
+        # AppleScript.
+        self._cache_inbox: dict[str, str] = {}
         self.max_attachment_bytes = max_attachment_bytes
         self.max_total_attachment_bytes = max_total_attachment_bytes
         self.max_inline_attachment_bytes = max_inline_attachment_bytes
@@ -1599,11 +1603,17 @@ class AppleMailConnector:
             return ""
         end tell
         """
+        if account in self._cache_inbox:
+            return self._cache_inbox[account]
         try:
             nom = self._run_applescript(script).strip()
         except MailError:
+            # Pas mis en cache : un echec transitoire ne doit pas figer le
+            # repli pour toute la duree du processus.
             return "INBOX"
-        return nom or "INBOX"
+        resolu = nom or "INBOX"
+        self._cache_inbox[account] = resolu
+        return resolu
 
     def list_mailboxes(self, account: str) -> list[dict[str, Any]]:
         """List all mailboxes for an account.
@@ -1837,7 +1847,7 @@ class AppleMailConnector:
     def search_messages(
         self,
         account: str,
-        mailbox: str = "INBOX",
+        mailbox: str | None = None,
         sender_contains: str | None = None,
         subject_contains: str | None = None,
         read_status: bool | None = None,
@@ -1875,7 +1885,13 @@ class AppleMailConnector:
         call commits to AppleScript and a body/text filter is set,
         ``on_warning`` (if provided) is invoked with a human-readable string
         describing the cost. See #145 / #146.
+
+        ``mailbox`` defaults to the account's real receiving mailbox, resolved
+        by asking Mail rather than assuming the name "INBOX". Pass a name
+        explicitly to search anywhere else.
         """
+        if mailbox is None:
+            mailbox = self.resolve_inbox_name(account)
         body_search = bool(body_contains or text_contains)
 
         # #230: received_within_hours is a hour-granular relative cutoff that
@@ -5023,7 +5039,8 @@ class AppleMailConnector:
             return self._create_reply_forward_draft_via_imap(
                 seed=seed,
                 seed_id=seed_id,
-                seed_mailbox=seed_mailbox or "INBOX",
+                seed_mailbox=seed_mailbox
+                or self.resolve_inbox_name(from_account or ""),
                 from_account=from_account,
                 to=to,
                 cc=cc,

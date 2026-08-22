@@ -8207,3 +8207,65 @@ class TestResolveInboxName:
         connector.resolve_inbox_name('He said "hi"')
         script = mock_run.call_args[0][0]
         assert '\\"hi\\"' in script
+
+
+class TestSearchMessagesResolvesInbox:
+    """search_messages(mailbox=None) must ask Mail for the receiving mailbox.
+
+    Before this, the default was the literal "INBOX", so an account whose
+    inbox is named otherwise returned nothing and looked empty.
+    """
+
+    @pytest.fixture
+    def connector(self) -> AppleMailConnector:
+        return AppleMailConnector(timeout=30)
+
+    @patch.object(AppleMailConnector, "_imap_breaker_open", return_value=True)
+    @patch.object(AppleMailConnector, "_search_messages_applescript")
+    @patch.object(AppleMailConnector, "resolve_inbox_name")
+    def test_resolves_when_mailbox_is_omitted(
+        self, mock_resolve: MagicMock, mock_search: MagicMock,
+        _breaker: MagicMock, connector: AppleMailConnector,
+    ) -> None:
+        """The IMAP path is skipped here on purpose: what is under test is
+        which mailbox name reaches the search, not which path runs it."""
+        mock_resolve.return_value = "Boîte de réception"
+        mock_search.return_value = []
+        connector.search_messages(account="Exchange")
+        mock_resolve.assert_called_once_with("Exchange")
+        assert mock_search.call_args.args[1] == "Boîte de réception"
+
+    @patch.object(AppleMailConnector, "_imap_breaker_open", return_value=True)
+    @patch.object(AppleMailConnector, "_search_messages_applescript")
+    @patch.object(AppleMailConnector, "resolve_inbox_name")
+    def test_explicit_mailbox_is_never_overridden(
+        self, mock_resolve: MagicMock, mock_search: MagicMock,
+        _breaker: MagicMock, connector: AppleMailConnector,
+    ) -> None:
+        """An explicit mailbox must win: callers search elsewhere on purpose."""
+        mock_search.return_value = []
+        connector.search_messages(account="Whatever", mailbox="Archive")
+        mock_resolve.assert_not_called()
+        assert mock_search.call_args.args[1] == "Archive"
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_resolution_is_cached_per_account(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        """One AppleScript per account, not one per call: the name does not
+        change during a session and each round-trip costs real time."""
+        mock_run.return_value = "INBOX"
+        connector.resolve_inbox_name("A")
+        connector.resolve_inbox_name("A")
+        connector.resolve_inbox_name("B")
+        assert mock_run.call_count == 2
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_failed_resolution_is_not_cached(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        """A transient failure must not freeze the fallback for the whole
+        process: the next call retries."""
+        mock_run.side_effect = [MailAppleScriptError("boom"), "Inbox"]
+        assert connector.resolve_inbox_name("A") == "INBOX"
+        assert connector.resolve_inbox_name("A") == "Inbox"

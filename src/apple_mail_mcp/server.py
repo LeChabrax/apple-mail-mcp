@@ -1007,7 +1007,7 @@ def _apply_search_filters(
 )
 def search_messages(
     account: str | None = None,
-    mailbox: str = "INBOX",
+    mailbox: str | None = None,
     sender_contains: str | None = None,
     subject_contains: str | None = None,
     read_status: bool | None = None,
@@ -1050,7 +1050,9 @@ def search_messages(
             UUID (from list_accounts). Required when ``source is None``;
             ignored when ``source`` is a list. Names are convenient but
             unstable across renames; UUIDs are stable.
-        mailbox: Mailbox name (default: "INBOX"). Ignored when ``source``
+        mailbox: Mailbox name. Defaults to the account's real receiving
+            mailbox, which is resolved by asking Mail instead of assuming it
+            is called "INBOX" (it is not, on some accounts). Ignored when ``source``
             is a list.
         sender_contains: Filter by sender email/domain substring.
         subject_contains: Filter by subject keywords substring.
