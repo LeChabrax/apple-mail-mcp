@@ -6031,8 +6031,10 @@ class TestCreateDraft:
             body="thanks",
         )
         script = mock_run.call_args[0][0]
-        assert "reply origMsg opening window false" in script
+        assert "reply origMsg without opening window" in script
         assert "reply to all" not in script
+        # A plain reply must not touch the CC list.
+        assert "make new cc recipient" not in script
 
     @patch.object(AppleMailConnector, "_run_applescript")
     def test_reply_all_uses_reply_to_all(
@@ -6046,7 +6048,14 @@ class TestCreateDraft:
             body="thanks",
         )
         script = mock_run.call_args[0][0]
-        assert "reply to all origMsg opening window false" in script
+        # "reply to all" collides with the AppleScript "reply" command keyword and
+        # fails to parse, so reply_all is a plain reply plus the original To/CC
+        # recipients copied into the draft's CC list.
+        assert "reply origMsg without opening window" in script
+        assert "reply to all" not in script
+        assert "to recipients of origMsg" in script
+        assert "cc recipients of origMsg" in script
+        assert "make new cc recipient" in script
 
     @patch.object(AppleMailConnector, "_run_applescript")
     def test_reply_body_overrides_auto_content(
@@ -6104,7 +6113,7 @@ class TestCreateDraft:
             body="fyi",
         )
         script = mock_run.call_args[0][0]
-        assert "forward origMsg opening window false" in script
+        assert "forward origMsg without opening window" in script
 
     # ------------------------------------------------------------------
     # Seed lookup error mapping

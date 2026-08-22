@@ -1,21 +1,22 @@
 # Apple Mail MCP Server
 
-[![Tests](https://github.com/s-morgan-jeffries/apple-mail-fast-mcp/actions/workflows/test.yml/badge.svg)](https://github.com/s-morgan-jeffries/apple-mail-fast-mcp/actions/workflows/test.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 An MCP server that provides programmatic access to Apple Mail, enabling AI assistants like Claude to read, send, search, and manage emails on macOS.
 
-> ⚠️ **Pre-1.0 — expect breaking changes.** The MCP tool surface (tool names, parameters, return shapes) is still evolving as the project matures. Pin to a specific version (for example, `apple-mail-fast-mcp==0.10.2`) and review the [CHANGELOG](CHANGELOG.md) before upgrading.
+> ⚠️ **Pre-1.0 — expect breaking changes.** The MCP tool surface (tool names, parameters, return shapes) is still evolving as the project matures. Pin to a specific version (for example, `apple-mail-mcp==0.10.2`) and review the [CHANGELOG](CHANGELOG.md) before upgrading.
 
-## Tools (24)
+## Tools (29)
 
-Grouped by lifecycle (10 read-only, 14 mutating):
+Grouped by lifecycle (10 read-only, 19 mutating):
 
 - **Discovery** — `list_accounts`, `list_mailboxes`, `list_rules`, `list_templates`: enumerate what's configured (no external cache — call per account).
 - **Read** — `search_messages`, `get_messages`, `get_thread`, `get_attachment_content`, `get_template`, `render_template`: read messages/threads, pull an attachment's content inline, and render templates.
 - **Message actions** — `update_message` (read/flag/move in one pass), `delete_messages` (→ Trash), `save_attachments` (to disk, byte-capped).
 - **Drafts** — `create_draft` (new / reply / forward, optionally `send_now`), `update_draft`, `delete_draft`.
+- **Direct send** — `send_email`, `reply`, `reply_all`, `forward`: send in a single call, without going through a draft. Each one sends for real; there is no second confirmation step inside Mail.
+- **Accounts** — `delete_account`: remove a configured account from Mail.app.
 - **Mailbox CRUD** — `create_mailbox`, `update_mailbox` (rename or move), `delete_mailbox`.
 - **Rules** — `create_rule`, `update_rule`, `delete_rule`.
 - **Templates (write)** — `save_template`, `delete_template`.
@@ -33,46 +34,46 @@ Destructive operations (`delete_*`, `create_rule` with move/forward/delete actio
 
 ```bash
 # From source (recommended for development)
-git clone https://github.com/s-morgan-jeffries/apple-mail-fast-mcp.git
-cd apple-mail-fast-mcp
+git clone https://github.com/LeChabrax/apple-mail-mcp.git
+cd apple-mail-mcp
 uv sync --dev
 ```
 
 ## Configuration
 
-Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`). `uv sync` installs a console script at `.venv/bin/apple-mail-fast-mcp`; point Claude Desktop at its **absolute path** — it's the most reliable form under Claude Desktop's restricted spawn environment (no reliance on `uv` being on `PATH`):
+Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`). `uv sync` installs a console script at `.venv/bin/apple-mail-mcp`; point Claude Desktop at its **absolute path** — it's the most reliable form under Claude Desktop's restricted spawn environment (no reliance on `uv` being on `PATH`):
 
 ```json
 {
   "mcpServers": {
     "apple-mail": {
-      "command": "/path/to/apple-mail-fast-mcp/.venv/bin/apple-mail-fast-mcp"
+      "command": "/path/to/apple-mail-mcp/.venv/bin/apple-mail-mcp"
     }
   }
 }
 ```
 
-(Equivalent alternative if you prefer driving it through uv: `"command": "uv", "args": ["--directory", "/path/to/apple-mail-fast-mcp", "run", "apple-mail-fast-mcp"]`.)
+(Equivalent alternative if you prefer driving it through uv: `"command": "uv", "args": ["--directory", "/path/to/apple-mail-mcp", "run", "apple-mail-mcp"]`.)
 
 ### Optional: split read / write servers
 
-Claude Desktop prompts per-tool for permission. If you want to **batch-approve the 9 read tools** (list / search / get) and still gate the 14 mutating tools per call, run the connector twice — once with `--read-only`, once without — under two separate `mcpServers` entries:
+Claude Desktop prompts per-tool for permission. If you want to **batch-approve the 10 read tools** (list / search / get) and still gate the 19 mutating tools per call, run the connector twice — once with `--read-only`, once without — under two separate `mcpServers` entries:
 
 ```json
 {
   "mcpServers": {
     "apple-mail-read": {
-      "command": "/path/to/apple-mail-fast-mcp/.venv/bin/apple-mail-fast-mcp",
+      "command": "/path/to/apple-mail-mcp/.venv/bin/apple-mail-mcp",
       "args": ["--read-only"]
     },
     "apple-mail-write": {
-      "command": "/path/to/apple-mail-fast-mcp/.venv/bin/apple-mail-fast-mcp"
+      "command": "/path/to/apple-mail-mcp/.venv/bin/apple-mail-mcp"
     }
   }
 }
 ```
 
-The `--read-only` server exposes only the 9 read tools, so Claude Desktop's per-server permission UI naturally groups them. The full server still gates writes individually. Trade-off: 2× connector processes. See [`docs/reference/TOOLS.md`](docs/reference/TOOLS.md) for the per-tool classification and a note on MCP annotation hints (`readOnlyHint` / `destructiveHint` / `idempotentHint`) which forward-compatible hosts may use to provide the same UX without the split.
+The `--read-only` server exposes only the 10 read tools, so Claude Desktop's per-server permission UI naturally groups them. The full server still gates writes individually. Trade-off: 2× connector processes. See [`docs/reference/TOOLS.md`](docs/reference/TOOLS.md) for the per-tool classification and a note on MCP annotation hints (`readOnlyHint` / `destructiveHint` / `idempotentHint`) which forward-compatible hosts may use to provide the same UX without the split.
 
 ## Permissions
 
@@ -94,7 +95,7 @@ On first run, macOS will prompt for Automation access. Grant permission in:
 
 2. Run the `setup-imap` subcommand. It prompts for the password (no echo), writes the Keychain entry, and verifies by connecting:
    ```bash
-   apple-mail-fast-mcp setup-imap --account iCloud
+   apple-mail-mcp setup-imap --account iCloud
    ```
    Substitute the Mail.app account name exactly — whatever it's labeled in Mail.app (e.g. `iCloud`, `Gmail`, `"Yahoo!"`). The CLI:
    - looks up the account's primary email from Mail.app (override with `--email`, which is **persisted** so runtime uses the same login — see the iCloud quirk below),
@@ -104,7 +105,7 @@ On first run, macOS will prompt for Automation access. Grant permission in:
 
 3. If you see a one-time "security wants to use the 'login' keychain" prompt on the next IMAP-backed call, click **Always Allow**.
 
-To remove the entry later: `apple-mail-fast-mcp setup-imap --account iCloud --uninstall`.
+To remove the entry later: `apple-mail-mcp setup-imap --account iCloud --uninstall`.
 
 ### Environment-variable fallback (uvx / headless / CI)
 
@@ -210,6 +211,39 @@ Docs:
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflow, coding standards, and PR process.
+
+## Credits
+
+This project is a fork of [apple-mail-fast-mcp](https://github.com/s-morgan-jeffries/apple-mail-fast-mcp)
+by Morgan Jeffries, which does all the heavy lifting: the AppleScript bridge, the IMAP
+fast path, the draft state store, the templates and the elicitation gates.
+
+What this fork adds on top of upstream v0.10.2:
+
+| Addition | Why |
+|---|---|
+| `send_email`, `reply`, `reply_all`, `forward` | Send in one call. Upstream only sends through `create_draft(send_now=True)`, which is a two-step flow for an agent. |
+| `delete_account` | Remove a configured account from Mail.app. |
+| `APPLE_MAIL_MCP_AUTO_CONFIRM` | Skip the elicitation prompt for callers that already gate sends on their own side. Off by default. |
+
+Everything else, including the tool surface, the tests and the docs, comes from upstream.
+Bug reports about the shared parts are better filed there.
+
+### What Mail.app will not let this server do
+
+Measured on macOS 15, worth knowing before opening an issue:
+
+- **An account created over AppleScript is never persisted.** `make new imap account`
+  returns an id and `count of accounts` sees it, but it is absent from Mail's Settings
+  window and gone once Mail quits. Adding an account for real needs a configuration
+  profile (`com.apple.mail.managed`), approved on screen. There is no scripted path:
+  `profiles install` answers "profiles tool no longer supports installs".
+- **`enabled` cannot be written on any account.** `set enabled` raises
+  `-10000 AppleEvent handler failed`, on a new account and on an existing active one,
+  over AppleScript and over JXA, with every reference form. Mail's own sdef declares the
+  property writable (no `access="r"`, cocoa key `isActive`); the implementation disagrees.
+- **Mail's Settings window is a stale snapshot.** It lists accounts AppleScript no longer
+  knows and omits ones it does. Never read account state from the UI.
 
 ## License
 
