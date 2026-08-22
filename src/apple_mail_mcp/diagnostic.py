@@ -6,12 +6,8 @@ réception de chaque compte configuré dans Mail, et y trouve-t-il des messages.
 
 Lecture seule, aucune écriture, aucun mot de passe demandé.
 
-    uvx --from git+https://github.com/LeChabrax/apple-mail-mcp \\
-        python scripts/diagnostic-boites.py
-
-ou, depuis un dépôt cloné :
-
-    uv run python scripts/diagnostic-boites.py
+    uvx --from git+https://github.com/LeChabrax/apple-mail-mcp@teams \\
+        apple-mail-mcp-diagnose
 """
 
 from __future__ import annotations

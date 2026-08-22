@@ -62,6 +62,7 @@ dev = [
 
 [project.scripts]
 apple-mail-mcp = "apple_mail_mcp.server:main"
+apple-mail-mcp-diagnose = "apple_mail_mcp.diagnostic:main"
 
 [project.urls]
 Homepage = "https://github.com/s-morgan-jeffries/apple-mail-fast-mcp"
