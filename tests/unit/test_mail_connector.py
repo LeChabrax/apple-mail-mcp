@@ -1355,7 +1355,7 @@ class TestAppleMailConnector:
         msg = warnings[0].getMessage()
         assert "iCloud" in msg
         # The actionable instruction must be present and command-perfect.
-        assert "apple-mail-fast-mcp setup-imap --account iCloud" in msg
+        assert "apple-mail-mcp setup-imap --account iCloud" in msg
         # Reassurance that the user isn't blocked.
         assert "AppleScript fallback" in msg
 

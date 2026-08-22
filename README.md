@@ -230,7 +230,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflow, coding standard
 
 ## Credits
 
-This project is a fork of [apple-mail-fast-mcp](https://github.com/s-morgan-jeffries/apple-mail-fast-mcp)
+This project is a fork of [apple-mail-mcp](https://github.com/s-morgan-jeffries/apple-mail-mcp)
 by Morgan Jeffries, which does all the heavy lifting: the AppleScript bridge, the IMAP
 fast path, the draft state store, the templates and the elicitation gates.
 

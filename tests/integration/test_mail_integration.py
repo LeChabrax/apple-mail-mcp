@@ -104,7 +104,7 @@ class TestMailIntegration:
         result = connector._search_messages_applescript(
             account=test_account,
             mailbox="INBOX",
-            subject_contains="[apple-mail-fast-mcp-no-such-subject]",
+            subject_contains="[apple-mail-mcp-no-such-subject]",
             on_warning=warnings.append,
         )
         assert result == []
@@ -338,7 +338,7 @@ class TestMailIntegration:
         ):
             pytest.skip(
                 f"No Keychain entry for {test_account!r} — IMAP path "
-                f"can't be exercised. Run `apple-mail-fast-mcp setup-imap` first."
+                f"can't be exercised. Run `apple-mail-mcp setup-imap` first."
             )
 
         matches = connector.search_messages(
@@ -499,7 +499,7 @@ class TestMailIntegration:
         ):
             pytest.skip(
                 f"No Keychain entry for {test_account!r} — IMAP path "
-                f"can't be exercised. Run `apple-mail-fast-mcp setup-imap` first."
+                f"can't be exercised. Run `apple-mail-mcp setup-imap` first."
             )
 
         matches = connector.search_messages(
@@ -555,14 +555,14 @@ class TestMailIntegration:
 
         suffix = _uuid.uuid4().hex[:8]
         box = f"ZZZ-AMM-ATT-{suffix}"
-        msg_id_local = f"{_uuid.uuid4().hex}@apple-mail-fast-mcp-test.invalid"
+        msg_id_local = f"{_uuid.uuid4().hex}@apple-mail-mcp-test.invalid"
         payload = b"%PDF-1.4 fake pdf " + _uuid.uuid4().hex.encode()
 
         assert connector.create_mailbox(account=test_account, name=box)
         try:
             m = EmailMessage()
-            m["From"] = "sender@apple-mail-fast-mcp-test.invalid"
-            m["To"] = "rcpt@apple-mail-fast-mcp-test.invalid"
+            m["From"] = "sender@apple-mail-mcp-test.invalid"
+            m["To"] = "rcpt@apple-mail-mcp-test.invalid"
             m["Subject"] = "AMM #371 save_attachments fast path"
             m["Date"] = format_datetime(datetime.now(tz=timezone.utc))
             m["Message-ID"] = f"<{msg_id_local}>"
@@ -687,7 +687,7 @@ class TestDraftsLifecycleIntegration:
         ):
             pytest.skip(
                 f"No Keychain entry for {test_account!r} — IMAP-APPEND path "
-                f"can't be exercised. Run `apple-mail-fast-mcp setup-imap` first."
+                f"can't be exercised. Run `apple-mail-mcp setup-imap` first."
             )
 
         result = connector.create_draft(
@@ -749,7 +749,7 @@ class TestDraftsLifecycleIntegration:
         ):
             pytest.skip(
                 f"No Keychain entry for {test_account!r} — IMAP-APPEND path "
-                f"can't be exercised. Run `apple-mail-fast-mcp setup-imap` first."
+                f"can't be exercised. Run `apple-mail-mcp setup-imap` first."
             )
 
         result = connector.create_draft(
@@ -802,7 +802,7 @@ class TestDraftsLifecycleIntegration:
         ):
             pytest.skip(
                 f"No Keychain entry for {test_account!r} — HTML IMAP-APPEND "
-                f"path can't be exercised. Run `apple-mail-fast-mcp setup-imap`."
+                f"path can't be exercised. Run `apple-mail-mcp setup-imap`."
             )
 
         marker = "ZZZ-AMM-INTEG-HTML251"
@@ -906,7 +906,7 @@ class TestDraftsLifecycleIntegration:
         ):
             pytest.skip(
                 f"No Keychain entry for {test_account!r} — IMAP path can't "
-                f"be exercised. Run `apple-mail-fast-mcp setup-imap` first."
+                f"be exercised. Run `apple-mail-mcp setup-imap` first."
             )
 
     def test_fetch_raw_message_happy_and_folder_miss(
@@ -930,7 +930,7 @@ class TestDraftsLifecycleIntegration:
 
         suffix = _uuid.uuid4().hex[:8]
         src = f"ZZZ-AMM-FETCHRAW-{suffix}"
-        msg_id_local = f"{_uuid.uuid4().hex}@apple-mail-fast-mcp-test.invalid"
+        msg_id_local = f"{_uuid.uuid4().hex}@apple-mail-mcp-test.invalid"
         host, port, email = connector._resolve_imap_config(test_account)
         pw = get_imap_password(test_account, email)
 
@@ -938,8 +938,8 @@ class TestDraftsLifecycleIntegration:
         try:
             now = format_datetime(datetime.now(tz=timezone.utc))
             raw = (
-                f"From: sender@apple-mail-fast-mcp-test.invalid\r\n"
-                f"To: rcpt@apple-mail-fast-mcp-test.invalid\r\n"
+                f"From: sender@apple-mail-mcp-test.invalid\r\n"
+                f"To: rcpt@apple-mail-mcp-test.invalid\r\n"
                 f"Subject: AMM #293 fetch-raw test\r\n"
                 f"Date: {now}\r\n"
                 f"Message-ID: <{msg_id_local}>\r\n"
@@ -987,15 +987,15 @@ class TestDraftsLifecycleIntegration:
 
         suffix = _uuid.uuid4().hex[:8]
         src = f"ZZZ-AMM-REPLYSRC-{suffix}"
-        orig_id = f"{_uuid.uuid4().hex}@apple-mail-fast-mcp-test.invalid"
+        orig_id = f"{_uuid.uuid4().hex}@apple-mail-mcp-test.invalid"
 
         assert connector.create_mailbox(account=test_account, name=src)
         draft_id = ""
         try:
             now = format_datetime(datetime.now(tz=timezone.utc))
             raw = (
-                f"From: Ada Original <ada@apple-mail-fast-mcp-test.invalid>\r\n"
-                f"To: rcpt@apple-mail-fast-mcp-test.invalid\r\n"
+                f"From: Ada Original <ada@apple-mail-mcp-test.invalid>\r\n"
+                f"To: rcpt@apple-mail-mcp-test.invalid\r\n"
                 f"Subject: AMM 293 original subject\r\n"
                 f"Date: {now}\r\n"
                 f"Message-ID: <{orig_id}>\r\n"
@@ -1284,7 +1284,7 @@ class TestDraftsLifecycleIntegration:
         suffix = _uuid.uuid4().hex[:8]
         src = f"ZZZ-AMM-MV-SRC-{suffix}"
         dst = f"ZZZ-AMM-MV-DST-{suffix}"
-        msg_id_local = f"{_uuid.uuid4().hex}@apple-mail-fast-mcp-test.invalid"
+        msg_id_local = f"{_uuid.uuid4().hex}@apple-mail-mcp-test.invalid"
         bracketed = f"<{msg_id_local}>"
 
         host, port, email = connector._resolve_imap_config(test_account)
@@ -1298,8 +1298,8 @@ class TestDraftsLifecycleIntegration:
             # gives us a known Message-ID without going through Mail.app.
             now = format_datetime(datetime.now(tz=timezone.utc))
             raw = (
-                f"From: sender@apple-mail-fast-mcp-test.invalid\r\n"
-                f"To: rcpt@apple-mail-fast-mcp-test.invalid\r\n"
+                f"From: sender@apple-mail-mcp-test.invalid\r\n"
+                f"To: rcpt@apple-mail-mcp-test.invalid\r\n"
                 f"Subject: AMM #149 IMAP move test\r\n"
                 f"Date: {now}\r\n"
                 f"Message-ID: {bracketed}\r\n"
@@ -1375,7 +1375,7 @@ class TestDraftsLifecycleIntegration:
         suffix = _uuid.uuid4().hex[:8]
         src = f"ZZZ-AMM-GM-SRC-{suffix}"
         dst = f"ZZZ-AMM-GM-DST-{suffix}"
-        msg_id_local = f"{_uuid.uuid4().hex}@apple-mail-fast-mcp-test.invalid"
+        msg_id_local = f"{_uuid.uuid4().hex}@apple-mail-mcp-test.invalid"
         bracketed = f"<{msg_id_local}>"
 
         assert connector.create_mailbox(account=test_account, name=src)
@@ -1384,8 +1384,8 @@ class TestDraftsLifecycleIntegration:
         try:
             now = format_datetime(datetime.now(tz=timezone.utc))
             raw = (
-                f"From: sender@apple-mail-fast-mcp-test.invalid\r\n"
-                f"To: rcpt@apple-mail-fast-mcp-test.invalid\r\n"
+                f"From: sender@apple-mail-mcp-test.invalid\r\n"
+                f"To: rcpt@apple-mail-mcp-test.invalid\r\n"
                 f"Subject: AMM #364 Gmail label move test\r\n"
                 f"Date: {now}\r\n"
                 f"Message-ID: {bracketed}\r\n"
@@ -1463,7 +1463,7 @@ class TestDraftsLifecycleIntegration:
 
         suffix = _uuid.uuid4().hex[:8]
         src = f"ZZZ-AMM-DEL-SRC-{suffix}"
-        msg_id_local = f"{_uuid.uuid4().hex}@apple-mail-fast-mcp-test.invalid"
+        msg_id_local = f"{_uuid.uuid4().hex}@apple-mail-mcp-test.invalid"
         bracketed = f"<{msg_id_local}>"
 
         host, port, email = connector._resolve_imap_config(test_account)
@@ -1476,8 +1476,8 @@ class TestDraftsLifecycleIntegration:
             # we have a known Message-ID without going through Mail.app.
             now = format_datetime(datetime.now(tz=timezone.utc))
             raw = (
-                f"From: sender@apple-mail-fast-mcp-test.invalid\r\n"
-                f"To: rcpt@apple-mail-fast-mcp-test.invalid\r\n"
+                f"From: sender@apple-mail-mcp-test.invalid\r\n"
+                f"To: rcpt@apple-mail-mcp-test.invalid\r\n"
                 f"Subject: AMM #150 IMAP delete test\r\n"
                 f"Date: {now}\r\n"
                 f"Message-ID: {bracketed}\r\n"
@@ -1579,7 +1579,7 @@ class TestDraftsLifecycleIntegration:
 
         suffix = _uuid.uuid4().hex[:8]
         src = f"ZZZ-AMM-READ-SRC-{suffix}"
-        msg_id_local = f"{_uuid.uuid4().hex}@apple-mail-fast-mcp-test.invalid"
+        msg_id_local = f"{_uuid.uuid4().hex}@apple-mail-mcp-test.invalid"
         bracketed = f"<{msg_id_local}>"
 
         host, port, email = connector._resolve_imap_config(test_account)
@@ -1592,8 +1592,8 @@ class TestDraftsLifecycleIntegration:
             # explicitly without \Seen.
             now = format_datetime(datetime.now(tz=timezone.utc))
             raw = (
-                f"From: sender@apple-mail-fast-mcp-test.invalid\r\n"
-                f"To: rcpt@apple-mail-fast-mcp-test.invalid\r\n"
+                f"From: sender@apple-mail-mcp-test.invalid\r\n"
+                f"To: rcpt@apple-mail-mcp-test.invalid\r\n"
                 f"Subject: AMM #151 IMAP read-status test\r\n"
                 f"Date: {now}\r\n"
                 f"Message-ID: {bracketed}\r\n"
@@ -1680,7 +1680,7 @@ class TestDraftsLifecycleIntegration:
 
         suffix = _uuid.uuid4().hex[:8]
         src = f"ZZZ-AMM-FLAG-SRC-{suffix}"
-        msg_id_local = f"{_uuid.uuid4().hex}@apple-mail-fast-mcp-test.invalid"
+        msg_id_local = f"{_uuid.uuid4().hex}@apple-mail-mcp-test.invalid"
         bracketed = f"<{msg_id_local}>"
 
         host, port, email = connector._resolve_imap_config(test_account)
@@ -1691,8 +1691,8 @@ class TestDraftsLifecycleIntegration:
         try:
             now = format_datetime(datetime.now(tz=timezone.utc))
             raw = (
-                f"From: sender@apple-mail-fast-mcp-test.invalid\r\n"
-                f"To: rcpt@apple-mail-fast-mcp-test.invalid\r\n"
+                f"From: sender@apple-mail-mcp-test.invalid\r\n"
+                f"To: rcpt@apple-mail-mcp-test.invalid\r\n"
                 f"Subject: AMM #152 IMAP flag round-trip test\r\n"
                 f"Date: {now}\r\n"
                 f"Message-ID: {bracketed}\r\n"
@@ -1781,7 +1781,7 @@ class TestDraftsLifecycleIntegration:
         suffix = _uuid.uuid4().hex[:8]
         src = f"ZZZ-AMM-OR316-{suffix}"
         ids_local = [
-            f"{_uuid.uuid4().hex}@apple-mail-fast-mcp-test.invalid" for _ in range(2)
+            f"{_uuid.uuid4().hex}@apple-mail-mcp-test.invalid" for _ in range(2)
         ]
 
         host, port, email = connector._resolve_imap_config(test_account)
@@ -1795,8 +1795,8 @@ class TestDraftsLifecycleIntegration:
             try:
                 for mid in ids_local:
                     raw = (
-                        f"From: s@apple-mail-fast-mcp-test.invalid\r\n"
-                        f"To: r@apple-mail-fast-mcp-test.invalid\r\n"
+                        f"From: s@apple-mail-mcp-test.invalid\r\n"
+                        f"To: r@apple-mail-mcp-test.invalid\r\n"
                         f"Subject: AMM #316 OR-search test\r\n"
                         f"Date: {now}\r\n"
                         f"Message-ID: <{mid}>\r\n"
@@ -1852,7 +1852,7 @@ class TestDraftsLifecycleIntegration:
 
         suffix = _uuid.uuid4().hex[:8]
         src = f"ZZZ-AMM-DUAL-EMIT-{suffix}"
-        msg_id_local = f"{_uuid.uuid4().hex}@apple-mail-fast-mcp-test.invalid"
+        msg_id_local = f"{_uuid.uuid4().hex}@apple-mail-mcp-test.invalid"
         bracketed = f"<{msg_id_local}>"
 
         host, port, email = connector._resolve_imap_config(test_account)
@@ -1863,8 +1863,8 @@ class TestDraftsLifecycleIntegration:
         try:
             now = format_datetime(datetime.now(tz=timezone.utc))
             raw = (
-                f"From: sender@apple-mail-fast-mcp-test.invalid\r\n"
-                f"To: rcpt@apple-mail-fast-mcp-test.invalid\r\n"
+                f"From: sender@apple-mail-mcp-test.invalid\r\n"
+                f"To: rcpt@apple-mail-mcp-test.invalid\r\n"
                 f"Subject: AMM #148 dual-emit test\r\n"
                 f"Date: {now}\r\n"
                 f"Message-ID: {bracketed}\r\n"
@@ -1950,7 +1950,7 @@ class TestDraftsLifecycleIntegration:
 
         suffix = _uuid.uuid4().hex[:8]
         src = f"ZZZ-AMM-RFC-FLAG-{suffix}"
-        msg_id_local = f"{_uuid.uuid4().hex}@apple-mail-fast-mcp-test.invalid"
+        msg_id_local = f"{_uuid.uuid4().hex}@apple-mail-mcp-test.invalid"
         bracketed = f"<{msg_id_local}>"
 
         host, port, email = connector._resolve_imap_config(test_account)
@@ -1960,8 +1960,8 @@ class TestDraftsLifecycleIntegration:
         try:
             now = format_datetime(datetime.now(tz=timezone.utc))
             raw = (
-                f"From: sender@apple-mail-fast-mcp-test.invalid\r\n"
-                f"To: rcpt@apple-mail-fast-mcp-test.invalid\r\n"
+                f"From: sender@apple-mail-mcp-test.invalid\r\n"
+                f"To: rcpt@apple-mail-mcp-test.invalid\r\n"
                 f"Subject: AMM #291 rfc-id flag test\r\n"
                 f"Date: {now}\r\n"
                 f"Message-ID: {bracketed}\r\n"

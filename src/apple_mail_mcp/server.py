@@ -1409,7 +1409,7 @@ def update_message(
             automatically (IMAP relabel when configured; otherwise a verified
             AppleScript move). A Gmail label move that can't be confirmed
             returns `error_type: "imap_required"` — configure IMAP with
-            `apple-mail-fast-mcp setup-imap --account <name>`. Slated for
+            `apple-mail-mcp setup-imap --account <name>`. Slated for
             removal at v1.0.
 
     Returns:
@@ -3563,7 +3563,7 @@ async def forward(
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="apple-mail-fast-mcp",
+        prog="apple-mail-mcp",
         description=(
             "Apple Mail MCP server. With no subcommand, starts the MCP "
             "server (this is what Claude Desktop / mcp clients invoke)."
