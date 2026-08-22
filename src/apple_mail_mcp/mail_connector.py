@@ -1030,6 +1030,18 @@ class AppleMailConnector:
         for acc in accounts:
             if not (acc.get("full_name") or "").strip():
                 acc["full_name"] = None
+        # Purge du cache de boites de reception pour les comptes qui ne sont
+        # plus la. Sans ca, un compte supprime puis recree sous le meme nom
+        # garderait la resolution de l'ancien, et rien ne le dirait.
+        if self._cache_inbox:
+            vivants = set()
+            for acc in accounts:
+                for cle in ("id", "name"):
+                    valeur = acc.get(cle)
+                    if valeur:
+                        vivants.add(valeur)
+            for parti in [c for c in self._cache_inbox if c not in vivants]:
+                del self._cache_inbox[parti]
         return accounts
 
     def delete_account(self, account: str) -> dict[str, Any]:
@@ -1062,6 +1074,8 @@ class AppleMailConnector:
         """
         script = f'try\n{tell_body}\non error errMsg\n  error errMsg\nend try'
         self._run_applescript(script)
+        for cle in (acc_id, match.get("name", "")):
+            self._cache_inbox.pop(cle, None)
         return {"id": acc_id, "name": match.get("name", "")}
 
     def _resolve_account_to_sender(self, account: str) -> str:
@@ -1561,7 +1575,11 @@ class AppleMailConnector:
         )
         return self._run_applescript(script)
 
-    def resolve_inbox_name(self, account: str) -> str:
+    def resolve_inbox_name(
+        self,
+        account: str,
+        on_warning: Callable[[str], None] | None = None,
+    ) -> str:
         """Return the real name of an account's receiving mailbox.
 
         Every caller here defaults ``mailbox`` to the literal ``"INBOX"``,
@@ -1605,15 +1623,34 @@ class AppleMailConnector:
         """
         if account in self._cache_inbox:
             return self._cache_inbox[account]
+
+        def replier(raison: str) -> str:
+            # Le repli est le comportement d'AVANT ce correctif : supposer le
+            # nom "INBOX". Il doit donc se voir, sinon un compte dont la boite
+            # porte un autre nom repasse silencieusement au bug d'origine, et
+            # paraitra simplement vide.
+            if on_warning is not None:
+                on_warning(
+                    f"Impossible de determiner la boite de reception du compte "
+                    f"{account!r} ({raison}). Repli sur le nom \"INBOX\", qui "
+                    f"peut ne pas exister sur ce compte : une recherche sans "
+                    f"resultat ne voudra alors pas dire que la boite est vide."
+                )
+            return "INBOX"
+
         try:
             nom = self._run_applescript(script).strip()
-        except MailError:
+        except MailError as exc:
             # Pas mis en cache : un echec transitoire ne doit pas figer le
             # repli pour toute la duree du processus.
-            return "INBOX"
-        resolu = nom or "INBOX"
-        self._cache_inbox[account] = resolu
-        return resolu
+            return replier(str(exc)[:120])
+        if not nom:
+            # Mail a repondu, mais n'a associe aucune boite de reception a ce
+            # compte. Mis en cache : ce n'est pas transitoire.
+            self._cache_inbox[account] = "INBOX"
+            return replier("Mail n'associe aucune boite de reception a ce compte")
+        self._cache_inbox[account] = nom
+        return nom
 
     def list_mailboxes(self, account: str) -> list[dict[str, Any]]:
         """List all mailboxes for an account.
@@ -1891,7 +1928,7 @@ class AppleMailConnector:
         explicitly to search anywhere else.
         """
         if mailbox is None:
-            mailbox = self.resolve_inbox_name(account)
+            mailbox = self.resolve_inbox_name(account, on_warning=on_warning)
         body_search = bool(body_contains or text_contains)
 
         # #230: received_within_hours is a hour-granular relative cutoff that

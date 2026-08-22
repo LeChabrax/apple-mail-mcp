@@ -8232,7 +8232,7 @@ class TestSearchMessagesResolvesInbox:
         mock_resolve.return_value = "Boîte de réception"
         mock_search.return_value = []
         connector.search_messages(account="Exchange")
-        mock_resolve.assert_called_once_with("Exchange")
+        mock_resolve.assert_called_once_with("Exchange", on_warning=None)
         assert mock_search.call_args.args[1] == "Boîte de réception"
 
     @patch.object(AppleMailConnector, "_imap_breaker_open", return_value=True)
@@ -8269,3 +8269,102 @@ class TestSearchMessagesResolvesInbox:
         mock_run.side_effect = [MailAppleScriptError("boom"), "Inbox"]
         assert connector.resolve_inbox_name("A") == "INBOX"
         assert connector.resolve_inbox_name("A") == "Inbox"
+
+
+class TestInboxFallbackIsLoud:
+    """Falling back to "INBOX" restores the pre-fix behaviour, so it has to be
+    visible. A silent fallback means an account whose inbox is named otherwise
+    quietly looks empty again, which is the bug this was meant to close.
+    """
+
+    @pytest.fixture
+    def connector(self) -> AppleMailConnector:
+        return AppleMailConnector(timeout=30)
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_warns_when_mail_associates_no_inbox(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        mock_run.return_value = ""
+        vus: list[str] = []
+        assert connector.resolve_inbox_name("Bizarre", on_warning=vus.append) == "INBOX"
+        assert len(vus) == 1
+        assert "Bizarre" in vus[0]
+        assert "INBOX" in vus[0]
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_warns_when_applescript_fails(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        mock_run.side_effect = MailAppleScriptError("boom")
+        vus: list[str] = []
+        assert connector.resolve_inbox_name("A", on_warning=vus.append) == "INBOX"
+        assert len(vus) == 1
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_silent_when_resolution_succeeds(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        """No warning on the normal path: a channel that always fires is a
+        channel nobody reads."""
+        mock_run.return_value = "Boîte de réception"
+        vus: list[str] = []
+        connector.resolve_inbox_name("A", on_warning=vus.append)
+        assert vus == []
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_empty_answer_is_cached_but_failure_is_not(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        """"Mail knows of no inbox here" is a stable fact worth caching; an
+        AppleScript error is not."""
+        mock_run.return_value = ""
+        connector.resolve_inbox_name("Stable")
+        connector.resolve_inbox_name("Stable")
+        assert mock_run.call_count == 1
+
+        mock_run.reset_mock()
+        mock_run.side_effect = MailAppleScriptError("boom")
+        connector.resolve_inbox_name("Transitoire")
+        connector.resolve_inbox_name("Transitoire")
+        assert mock_run.call_count == 2
+
+
+class TestInboxCacheInvalidation:
+    """The cache must not outlive the account it describes.
+
+    A cache keyed by account name, never invalidated, hands the old resolution
+    to an account deleted and recreated under the same name.
+    """
+
+    @pytest.fixture
+    def connector(self) -> AppleMailConnector:
+        return AppleMailConnector(timeout=30)
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_list_accounts_drops_vanished_accounts(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        connector._cache_inbox["Parti"] = "Vieux nom"
+        connector._cache_inbox["Reste"] = "INBOX"
+        # One surviving account named "Reste" is enough here.
+        mock_run.return_value = (
+            '[{"id":"AAA","name":"Reste","full_name":"X",'
+            '"email_addresses":["a@b.c"],'
+            '"account_type":"imap","enabled":true}]'
+        )
+        connector.list_accounts()
+        assert "Parti" not in connector._cache_inbox
+        assert "Reste" in connector._cache_inbox
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    @patch.object(AppleMailConnector, "list_accounts")
+    def test_delete_account_drops_its_entry(
+        self, mock_list: MagicMock, mock_run: MagicMock,
+        connector: AppleMailConnector,
+    ) -> None:
+        mock_list.return_value = [{"id": "UUID-1", "name": "Vieux"}]
+        connector._cache_inbox["UUID-1"] = "INBOX"
+        connector._cache_inbox["Vieux"] = "INBOX"
+        connector.delete_account("UUID-1")
+        assert connector._cache_inbox == {}
