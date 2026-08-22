@@ -5,6 +5,7 @@ FastMCP server for Apple Mail integration.
 import argparse
 import atexit
 import logging
+import os
 import sys
 import tempfile
 from collections.abc import Callable
@@ -82,7 +83,20 @@ def _pre_parse_read_only(argv: list[str] | None = None) -> bool:
 _READ_ONLY = _pre_parse_read_only()
 
 # Create FastMCP server
-mcp = FastMCP("apple-mail")
+_SERVER_INSTRUCTIONS = """\
+MCP principal pour Apple Mail. Tu lis et écris directement dans Mail.app sur le Mac de l'utilisateur.
+
+COMPORTEMENT :
+- Pas de narration des étapes ("je charge l'outil", "parfait le tool est chargé", "je lance la recherche"). Exécute, puis présente le résultat.
+- Réponses compactes, pas de préambule ni de résumé de ce que tu viens de faire.
+
+ENVOI :
+- send_email / reply / reply_all / forward envoient RÉELLEMENT le message en un appel. N'invente pas de "sécurité côté serveur" qui obligerait l'utilisateur à cliquer Envoyer dans Mail.app — l'envoi est automatique.
+- Avant un envoi, montre le brouillon (destinataire, objet, corps) et attends un "ok/envoie" explicite. Après accord, appelle send_email directement : c'est envoyé, ne dis pas à l'utilisateur de le faire à la main.
+
+OUTILS CLÉS : list_accounts, list_mailboxes, search_messages, get_messages, get_thread, send_email, reply, reply_all, forward, create_draft, update_message, delete_messages, save_attachments.
+"""
+mcp = FastMCP("apple-mail", instructions=_SERVER_INSTRUCTIONS)
 
 # Param-coercion aliases for MCP hosts that stringify array/dict arguments
 # (e.g. Cowork — #309). BeforeValidator runs ahead of type validation, so a
@@ -197,6 +211,13 @@ async def _elicit_confirmation(
           proceeded; the silent-pass was a real bypass of the
           confirmation gate.
     """
+    # Auto-confirm bypass (LMP): clients like the Claude.ai connector do not
+    # support MCP elicitation, so every gated op fails closed and becomes
+    # unusable. When APPLE_MAIL_MCP_AUTO_CONFIRM=true the user has pre-accepted
+    # destructive ops at config time — treat the gate as accepted.
+    if os.environ.get("APPLE_MAIL_MCP_AUTO_CONFIRM", "").lower() == "true":
+        operation_logger.log_operation(operation, params, "auto_confirmed")
+        return None
     if ctx is None:
         operation_logger.log_operation(
             operation, params, "confirmation_required"
@@ -299,6 +320,41 @@ def list_accounts() -> dict[str, Any]:
             "success": False,
             "error": str(e),
             "error_type": "unknown",
+        }
+
+
+@_tool(
+    {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False},
+    mutating=True,
+)
+def delete_account(account: str) -> dict[str, Any]:
+    """
+    Delete a mail account from Mail.app.
+
+    Removes the account entirely from Mail.app. Use the account UUID
+    (from list_accounts) for stability across renames.
+
+    Args:
+        account: Account display name (e.g., "Gmail") or UUID.
+
+    Returns:
+        Dictionary with ``success``, ``id``, and ``name`` of the deleted account.
+
+    Example:
+        >>> delete_account("F25904B7-7E8E-468C-81EF-2E3EAAE3F649")
+        {"success": True, "id": "F25904B7-...", "name": "moi@exemple.fr"}
+    """
+    try:
+        logger.info(f"Deleting account: {account!r}")
+        result = mail.delete_account(account)
+        operation_logger.log_operation("delete_account", {"account": account}, "success")
+        return {"success": True, **result}
+    except Exception as e:
+        logger.error(f"Error deleting account: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "error_type": type(e).__name__,
         }
 
 
@@ -3342,6 +3398,167 @@ def delete_draft(draft_id: str) -> dict[str, Any]:
     except Exception as e:
         logger.exception(f"Unexpected error in delete_draft: {e}")
         return {"success": False, "error": str(e), "error_type": "unknown"}
+
+
+@_tool(
+    {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+    mutating=True,
+)
+async def send_email(
+    to: StrList,
+    subject: str,
+    body: str = "",
+    from_account: str | None = None,
+    cc: StrList | None = None,
+    bcc: StrList | None = None,
+    attachment_paths: StrList | None = None,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Send a new email immediately.
+
+    Convenience wrapper over create_draft with send_now=True.
+
+    Args:
+        to: List of recipient email addresses.
+        subject: Email subject.
+        body: Plain text body.
+        from_account: Mail.app account name or UUID. None = Mail default.
+        cc: CC recipients.
+        bcc: BCC recipients.
+        attachment_paths: List of local file paths to attach.
+
+    Returns:
+        ``{"success": True, "draft_id": "", "sent_message_id": ""}`` on success.
+    """
+    return await create_draft(
+        to=to,
+        subject=subject,
+        body=body,
+        from_account=from_account,
+        cc=cc,
+        bcc=bcc,
+        attachment_paths=attachment_paths,
+        send_now=True,
+        ctx=ctx,
+    )
+
+
+@_tool(
+    {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+    mutating=True,
+)
+async def reply(
+    reply_to: str,
+    body: str = "",
+    from_account: str | None = None,
+    cc: StrList | None = None,
+    seed_mailbox: str | None = None,
+    send_now: bool = True,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Reply to an existing message.
+
+    Convenience wrapper over create_draft with seed=reply.
+
+    Args:
+        reply_to: Id of the message to reply to (numeric Mail.app id or
+            RFC 5322 Message-ID from search_messages/get_messages).
+        body: Reply body. Empty keeps Mail's auto-quoted original.
+        from_account: Mail.app account name or UUID. None = Mail default.
+        cc: CC recipients (None keeps auto-derived; [] clears).
+        seed_mailbox: Folder the original lives in (default INBOX).
+        send_now: True (default) sends immediately; False saves as draft.
+
+    Returns:
+        ``{"success": True, "draft_id": ..., "sent_message_id": ...}``.
+    """
+    return await create_draft(
+        reply_to=reply_to,
+        body=body,
+        from_account=from_account,
+        cc=cc,
+        seed_mailbox=seed_mailbox,
+        send_now=send_now,
+        ctx=ctx,
+    )
+
+
+@_tool(
+    {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+    mutating=True,
+)
+async def reply_all(
+    reply_to: str,
+    body: str = "",
+    from_account: str | None = None,
+    seed_mailbox: str | None = None,
+    send_now: bool = True,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Reply to all recipients of an existing message.
+
+    Convenience wrapper over create_draft with seed=reply and reply_all=True.
+
+    Args:
+        reply_to: Id of the message to reply to (numeric Mail.app id or
+            RFC 5322 Message-ID from search_messages/get_messages).
+        body: Reply body. Empty keeps Mail's auto-quoted original.
+        from_account: Mail.app account name or UUID. None = Mail default.
+        seed_mailbox: Folder the original lives in (default INBOX).
+        send_now: True (default) sends immediately; False saves as draft.
+
+    Returns:
+        ``{"success": True, "draft_id": ..., "sent_message_id": ...}``.
+    """
+    return await create_draft(
+        reply_to=reply_to,
+        body=body,
+        from_account=from_account,
+        reply_all=True,
+        seed_mailbox=seed_mailbox,
+        send_now=send_now,
+        ctx=ctx,
+    )
+
+
+@_tool(
+    {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+    mutating=True,
+)
+async def forward(
+    forward_of: str,
+    to: StrList,
+    body: str = "",
+    from_account: str | None = None,
+    seed_mailbox: str | None = None,
+    send_now: bool = True,
+    ctx: Context | None = None,
+) -> dict[str, Any]:
+    """Forward an existing message to new recipients.
+
+    Convenience wrapper over create_draft with seed=forward.
+
+    Args:
+        forward_of: Id of the message to forward (numeric Mail.app id or
+            RFC 5322 Message-ID from search_messages/get_messages).
+        to: List of recipient email addresses.
+        body: Optional intro text prepended above the forwarded content.
+        from_account: Mail.app account name or UUID. None = Mail default.
+        seed_mailbox: Folder the original lives in (default INBOX).
+        send_now: True (default) sends immediately; False saves as draft.
+
+    Returns:
+        ``{"success": True, "draft_id": ..., "sent_message_id": ...}``.
+    """
+    return await create_draft(
+        forward_of=forward_of,
+        to=to,
+        body=body,
+        from_account=from_account,
+        seed_mailbox=seed_mailbox,
+        send_now=send_now,
+        ctx=ctx,
+    )
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:

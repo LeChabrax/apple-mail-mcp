@@ -48,6 +48,7 @@ DESTRUCTIVE_TOOLS: set[str] = {
     "delete_messages",
     "delete_rule",
     "delete_template",
+    "delete_account",
 }
 
 ADDITIVE_TOOLS: set[str] = {
@@ -56,6 +57,11 @@ ADDITIVE_TOOLS: set[str] = {
     "create_rule",
     "save_template",
     "save_attachments",
+    # Fork additions: send in one call, no draft round-trip.
+    "send_email",
+    "reply",
+    "reply_all",
+    "forward",
 }
 
 MUTATING_TOOLS = DESTRUCTIVE_TOOLS | ADDITIVE_TOOLS
@@ -64,6 +70,11 @@ MUTATING_TOOLS = DESTRUCTIVE_TOOLS | ADDITIVE_TOOLS
 NON_IDEMPOTENT_TOOLS: set[str] = {
     "create_draft",   # each call may create a new draft
     "create_rule",    # rules may be appended on each call
+    "send_email",     # each call sends another message
+    "reply",
+    "reply_all",
+    "forward",
+    "delete_account", # the account is gone after the first call
 }
 
 
@@ -172,7 +183,7 @@ class TestProductionAnnotations:
         """No overlap between read-only and mutating sets; counts are 10 + 14."""
         assert READ_ONLY_TOOLS.isdisjoint(MUTATING_TOOLS)
         assert len(READ_ONLY_TOOLS) == 10
-        assert len(MUTATING_TOOLS) == 14
+        assert len(MUTATING_TOOLS) == 19
         assert DESTRUCTIVE_TOOLS.isdisjoint(ADDITIVE_TOOLS)
 
     @pytest.mark.parametrize("name", sorted(READ_ONLY_TOOLS))

@@ -1027,6 +1027,38 @@ class AppleMailConnector:
                 acc["full_name"] = None
         return accounts
 
+    def delete_account(self, account: str) -> dict[str, Any]:
+        """Delete a mail account from Mail.app.
+
+        Args:
+            account: Account name or UUID (from list_accounts).
+
+        Returns:
+            Dict with ``name`` and ``id`` of the deleted account.
+
+        Raises:
+            MailAccountNotFoundError: If the account doesn't exist.
+        """
+        accounts = self.list_accounts()
+        match = None
+        for acc in accounts:
+            if acc.get("id") == account or acc.get("name") == account:
+                match = acc
+                break
+        if match is None:
+            raise MailAccountNotFoundError(
+                f"Account {account!r} not found in Mail.app configured accounts."
+            )
+        acc_id = match["id"]
+        tell_body = f"""
+        tell application "Mail"
+            delete (first account whose id is "{acc_id}")
+        end tell
+        """
+        script = f'try\n{tell_body}\non error errMsg\n  error errMsg\nend try'
+        self._run_applescript(script)
+        return {"id": acc_id, "name": match.get("name", "")}
+
     def _resolve_account_to_sender(self, account: str) -> str:
         """Resolve an account name or UUID to a sender string for the
         AppleScript ``sender`` property.
@@ -4641,9 +4673,25 @@ class AppleMailConnector:
                 f'{{subject:"{subject_safe}", content:"{body_safe}", visible:false}}'
             )
         if seed == "reply":
-            verb = "reply to all" if reply_all else "reply"
+            verb = "reply"
         else:  # forward
             verb = "forward"
+        extra = ""
+        if seed == "reply" and reply_all:
+            # "reply to all" parameter name conflicts with the AppleScript "reply" command
+            # keyword, causing a parse error. Workaround: create a standard reply, then
+            # manually copy the original To/CC recipients into the reply's CC list.
+            extra = """
+            set origToAddrs to {}
+            repeat with r in to recipients of origMsg
+                set end of origToAddrs to address of r
+            end repeat
+            repeat with r in cc recipients of origMsg
+                set end of origToAddrs to address of r
+            end repeat
+            repeat with addr in origToAddrs
+                make new cc recipient at end of cc recipients of theMessage with properties {address: addr as text}
+            end repeat"""
         return f"""
             set origMsg to missing value
             repeat with acc in accounts
@@ -4658,7 +4706,7 @@ class AppleMailConnector:
                 if origMsg is not missing value then exit repeat
             end repeat
             if origMsg is missing value then error "SEED_NOT_FOUND"
-            set theMessage to {verb} origMsg opening window false
+            set theMessage to {verb} origMsg without opening window{extra}
         """
 
     def _create_draft_via_imap(
