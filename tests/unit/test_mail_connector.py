@@ -8147,3 +8147,63 @@ class TestSyncAccountDrafts:
                 from_account="iCloud",
             )
         assert result["draft_id"] == "<m@h>"
+
+
+class TestResolveInboxName:
+    """Tests for AppleMailConnector.resolve_inbox_name.
+
+    The point of the method is to stop assuming the receiving mailbox is
+    called "INBOX". An account whose inbox carries any other name used to
+    read as "this account has no inbox", which is a lookup failure dressed
+    up as a fact about the account.
+    """
+
+    @pytest.fixture
+    def connector(self) -> AppleMailConnector:
+        return AppleMailConnector(timeout=30)
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_returns_name_reported_by_mail(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        mock_run.return_value = "Boîte de réception\n"
+        assert connector.resolve_inbox_name("Some Account") == "Boîte de réception"
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_asks_mail_instead_of_guessing_a_name(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        """The lookup goes through the unified inbox's per-account mailboxes,
+        which is what makes it name-agnostic."""
+        mock_run.return_value = "INBOX"
+        connector.resolve_inbox_name("Some Account")
+        script = mock_run.call_args[0][0]
+        assert "every mailbox of inbox" in script
+        assert "account of m" in script
+        # It must not hardcode the mailbox it is trying to discover.
+        assert '"INBOX"' not in script
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_falls_back_to_inbox_when_mail_reports_nothing(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        mock_run.return_value = ""
+        assert connector.resolve_inbox_name("Unknown") == "INBOX"
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_falls_back_to_inbox_on_applescript_error(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        """A failed resolution must degrade to the old default, never raise:
+        callers use the result as a mailbox argument."""
+        mock_run.side_effect = MailAppleScriptError("boom")
+        assert connector.resolve_inbox_name("Whatever") == "INBOX"
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_quotes_account_names_containing_quotes(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        mock_run.return_value = "INBOX"
+        connector.resolve_inbox_name('He said "hi"')
+        script = mock_run.call_args[0][0]
+        assert '\\"hi\\"' in script

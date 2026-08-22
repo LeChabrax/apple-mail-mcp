@@ -23,6 +23,7 @@ See ``docs/plans/2026-04-23-imap-connector-design.md``.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 import time
@@ -53,19 +54,54 @@ logger = logging.getLogger(__name__)
 # preferable to reshuffling the module layout.
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-CONNECT_TIMEOUT_S: float = 3.0
+def _env_timeout(env_name: str, default: float) -> float:
+    """Read a positive float timeout from the environment.
+
+    Same contract as the attachment-cap overrides in server.py: an invalid
+    or non-positive value is ignored with a warning rather than crashing the
+    server at import time, because a bad env var must not make the whole
+    connector unusable.
+
+    Timeouts are tunable because they are sized for ordinary mailboxes. A
+    very large one needs more: this module's own measurement is 148s for 100
+    cold-cache messages on a 47k-message mailbox, so a server-side SEARCH
+    there can outlast the 30s default and silently drop the IMAP fast path.
+    Raising the default for everyone would make offline detection sluggish
+    for everyone, hence a knob instead.
+    """
+    raw = os.getenv(env_name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("Ignoring non-numeric %s=%r, keeping %s", env_name, raw, default)
+        return default
+    if value <= 0:
+        logger.warning("Ignoring non-positive %s=%r, keeping %s", env_name, raw, default)
+        return default
+    return value
+
+
+CONNECT_TIMEOUT_S: float = _env_timeout("APPLE_MAIL_MCP_CONNECT_TIMEOUT_S", 3.0)
 """Per invariant 4 in imap-auth-options-decision.md: ≤3s so offline
 fallback happens inside the graceful-degradation window without
 waiting for TCP's default timeout. Bounds connect + login only — once
-logged in the socket timeout is raised to OPERATION_TIMEOUT_S (#249)."""
+logged in the socket timeout is raised to OPERATION_TIMEOUT_S (#249).
 
-OPERATION_TIMEOUT_S: float = 30.0
+Override with APPLE_MAIL_MCP_CONNECT_TIMEOUT_S (raising it delays offline
+detection, so prefer leaving this one alone)."""
+
+OPERATION_TIMEOUT_S: float = _env_timeout("APPLE_MAIL_MCP_OPERATION_TIMEOUT_S", 30.0)
 """Socket read timeout for SEARCH/FETCH after login. imapclient's
 ``timeout=`` applies to every socket read, so the short CONNECT_TIMEOUT_S
 would otherwise kill a legitimate server-side SEARCH (10–20s on a large
 iCloud mailbox) mid-operation, silently dropping the IMAP fast path to the
 slower AppleScript fallback. We connect fast (offline detection) then raise
-the timeout for real work. (#249)"""
+the timeout for real work. (#249)
+
+Override with APPLE_MAIL_MCP_OPERATION_TIMEOUT_S. This is the one to raise
+on a very large mailbox where SEARCH/FETCH legitimately takes minutes."""
 
 
 def _apply_operation_timeout(client: IMAPClient) -> None:
@@ -74,7 +110,7 @@ def _apply_operation_timeout(client: IMAPClient) -> None:
     ``client.login(...)`` at every connection-open site. (#249)"""
     client.socket().settimeout(OPERATION_TIMEOUT_S)
 
-POOL_IDLE_TIMEOUT_S: float = 270.0
+POOL_IDLE_TIMEOUT_S: float = _env_timeout("APPLE_MAIL_MCP_POOL_IDLE_TIMEOUT_S", 270.0)
 """Default pool idle threshold. iCloud and most providers drop IMAP
 sessions after ~30 min idle. 270s = 4.5 min keeps us comfortably under
 that while still amortizing connect cost across realistic interactive

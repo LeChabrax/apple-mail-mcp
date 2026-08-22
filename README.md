@@ -146,6 +146,22 @@ If IMAP is working, the call returns in ~1 second. If it logs a WARNING about fa
 
 **Write operations** (`create_draft`, `update_draft`, including the `send_now=true` send path) always use AppleScript regardless of IMAP configuration — these need Mail.app's compose UI.
 
+### Timeouts on very large mailboxes
+
+The defaults are sized for ordinary mailboxes and are worth raising on a
+large one. This module's own measurement is 148s for 100 cold-cache messages
+on a 47k-message mailbox, so a server-side `SEARCH` there can outlast the
+30s default and silently fall back to the slower AppleScript path.
+
+| Variable | Default | What it bounds |
+|---|---|---|
+| `APPLE_MAIL_MCP_OPERATION_TIMEOUT_S` | 30 | IMAP `SEARCH` / `FETCH` after login. **The one to raise.** |
+| `APPLE_MAIL_MCP_CONNECT_TIMEOUT_S` | 3 | IMAP connect + login. Raising it delays offline detection, so prefer leaving it alone. |
+| `APPLE_MAIL_MCP_POOL_IDLE_TIMEOUT_S` | 270 | How long a pooled connection may sit idle before being recycled. |
+
+A non-numeric or non-positive value is ignored with a warning and the default
+is kept, so a typo cannot take the server down.
+
 ## Development
 
 ```bash

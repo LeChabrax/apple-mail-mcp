@@ -34,6 +34,7 @@ from .exceptions import (
     MailAttachmentTooLargeError,
     MailDraftHtmlUnavailableError,
     MailDraftNotFoundError,
+    MailError,
     MailImapMoveUnsupportedError,
     MailImapRequiredError,
     MailImapTrashNotFoundError,
@@ -1555,6 +1556,54 @@ class AppleMailConnector:
             timeout=self.timeout,
         )
         return self._run_applescript(script)
+
+    def resolve_inbox_name(self, account: str) -> str:
+        """Return the real name of an account's receiving mailbox.
+
+        Every caller here defaults ``mailbox`` to the literal ``"INBOX"``,
+        which is a guess: Mail.app names that mailbox after whatever the
+        server advertises, and an account whose receiving folder is called
+        something else (Exchange accounts in particular) reads as "this
+        account has no inbox" rather than as a lookup that failed.
+
+        So ask Mail instead of guessing. The application-level ``inbox`` is
+        the unified "All Inboxes"; its ``mailboxes`` are the per-account
+        receiving folders, and ``account of mailbox`` maps each one back to
+        its owner. That holds whatever the folder is called, which is the
+        whole point.
+
+        Note the two dead ends, both measured on macOS 15 (2026-08-22):
+        ``inbox of account`` is declared in Mail's sdef as a readable
+        property of the account class, and raises -1728 on every account,
+        by id or by iteration. The sdef does not describe the
+        implementation here, the same way it does not for ``enabled``.
+
+        Args:
+            account: Account name or UUID.
+
+        Returns:
+            The mailbox name to use, falling back to ``"INBOX"`` when the
+            account has no receiving folder Mail will admit to.
+        """
+        wanted = account.replace("\\", "\\\\").replace('"', '\\"')
+        script = f"""
+        tell application "Mail"
+            repeat with m in (every mailbox of inbox)
+                try
+                    set acc to account of m
+                    if (id of acc as text) is "{wanted}" or (name of acc) is "{wanted}" then
+                        return name of m
+                    end if
+                end try
+            end repeat
+            return ""
+        end tell
+        """
+        try:
+            nom = self._run_applescript(script).strip()
+        except MailError:
+            return "INBOX"
+        return nom or "INBOX"
 
     def list_mailboxes(self, account: str) -> list[dict[str, Any]]:
         """List all mailboxes for an account.
