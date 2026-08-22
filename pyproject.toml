@@ -26,7 +26,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "fastmcp>=3.3.1",
+    "fastmcp>=3.4.7",
     "imapclient>=3.1.0",
     # Imported directly (BeforeValidator in server.py); reaching it through
     # fastmcp -> fastmcp-slim would break the day either drops it.
