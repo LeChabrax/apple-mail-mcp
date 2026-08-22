@@ -722,6 +722,37 @@ class ImapConnector:
         finally:
             client.logout()
 
+    def resolve_inbox(self) -> str:
+        """Return the receiving mailbox's real name, asked of the server.
+
+        Selecting a folder literally named "INBOX" is a guess. RFC 6154
+        gives the server a way to say which folder is the inbox: the
+        ``\\Inbox`` attribute in the LIST response. Ask for that, and the
+        folder's actual name stops mattering.
+
+        This is what makes the difference on an account whose receiving
+        folder is named something else: probing "INBOX" there fails with a
+        protocol error, which reads as bad credentials or a dead server
+        rather than as a folder that was never called that.
+
+        Returns:
+            The mailbox name to select, falling back to ``"INBOX"`` when the
+            server advertises no inbox attribute.
+        """
+        with self._session() as client:
+            try:
+                dossiers = client.list_folders()
+            except (OSError, IMAPClientError):
+                return "INBOX"
+            for drapeaux, _delimiteur, nom in dossiers:
+                plats = {
+                    (d.decode(errors="replace") if isinstance(d, bytes) else str(d)).lower()
+                    for d in (drapeaux or ())
+                }
+                if "\\inbox" in plats:
+                    return nom if isinstance(nom, str) else nom.decode(errors="replace")
+        return "INBOX"
+
     def search_messages(
         self,
         mailbox: str = "INBOX",

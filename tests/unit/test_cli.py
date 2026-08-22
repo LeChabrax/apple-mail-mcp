@@ -686,3 +686,38 @@ class TestLoginOverride:
         assert rc == 1
         err = capsys.readouterr().err
         assert "--email" in err and "icloud.com" in err.lower()
+
+
+class TestSetupProbesServerAdvertisedInbox:
+    """The setup probe must select the folder the SERVER calls its inbox.
+
+    Probing a folder assumed to be named "INBOX" fails with a protocol error
+    on an account where it is named otherwise, and the probe then reports a
+    dead server or bad credentials for a mailbox that is perfectly reachable.
+    """
+
+    def test_probe_uses_resolved_inbox_not_a_hardcoded_name(
+        self,
+        mock_connector: MagicMock,
+        mock_imap_client: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from apple_mail_mcp import cli as cli_mod
+
+        monkeypatch.setattr(cli_mod, "set_imap_password", lambda a, e, p: None)
+        mock_imap_client.resolve_inbox.return_value = "Boîte de réception"
+
+        rc = run_setup_imap(
+            account_name="iCloud",
+            cli_email=None,
+            uninstall=False,
+            connector_factory=lambda: mock_connector,
+            getpass_fn=lambda prompt: "appspecificpw",
+            imap_factory=lambda h, p, e, pw: mock_imap_client,
+        )
+        assert rc == 0
+        mock_imap_client.resolve_inbox.assert_called_once()
+        assert (
+            mock_imap_client.search_messages.call_args.kwargs["mailbox"]
+            == "Boîte de réception"
+        )

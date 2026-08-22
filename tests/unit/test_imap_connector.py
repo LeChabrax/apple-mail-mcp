@@ -3500,3 +3500,57 @@ class TestEnvelopeVanishRobustness:
         conn = ImapConnector("imap.example.com", 993, "u@e.com", "pw")
         with pytest.raises(MailMessageNotFoundError):
             conn.get_message("<gone@example.com>")
+
+
+class TestResolveInbox:
+    """resolve_inbox asks the server which folder is the inbox.
+
+    RFC 6154 has the server advertise it with the \\Inbox attribute, so the
+    folder's actual name stops mattering. Selecting a folder assumed to be
+    named "INBOX" fails on accounts where it is named otherwise, and reads as
+    a dead server rather than as a wrong guess.
+    """
+
+    @patch("apple_mail_mcp.imap_connector.IMAPClient")
+    def test_returns_the_folder_flagged_as_inbox(self, mock_cls):
+        client = MagicMock()
+        mock_cls.return_value = client
+        client.list_folders.return_value = [
+            ((rb"\HasNoChildren", rb"\Sent"), b"/", "Sent Items"),
+            ((rb"\HasNoChildren", rb"\Inbox"), b"/", "Boîte de réception"),
+            ((rb"\HasNoChildren",), b"/", "INBOX"),
+        ]
+        conn = ImapConnector("imap.example.com", 993, "u@e.com", "pw")
+        assert conn.resolve_inbox() == "Boîte de réception"
+
+    @patch("apple_mail_mcp.imap_connector.IMAPClient")
+    def test_falls_back_when_no_folder_is_flagged(self, mock_cls):
+        client = MagicMock()
+        mock_cls.return_value = client
+        client.list_folders.return_value = [
+            ((rb"\HasNoChildren",), b"/", "Archive"),
+        ]
+        conn = ImapConnector("imap.example.com", 993, "u@e.com", "pw")
+        assert conn.resolve_inbox() == "INBOX"
+
+    @patch("apple_mail_mcp.imap_connector.IMAPClient")
+    def test_falls_back_when_listing_fails(self, mock_cls):
+        """A LIST failure must degrade to the old default, never raise: the
+        result is used as a mailbox name by the caller."""
+        client = MagicMock()
+        mock_cls.return_value = client
+        client.list_folders.side_effect = IMAPClientError("nope")
+        conn = ImapConnector("imap.example.com", 993, "u@e.com", "pw")
+        assert conn.resolve_inbox() == "INBOX"
+
+    @patch("apple_mail_mcp.imap_connector.IMAPClient")
+    def test_accepts_str_flags_and_bytes_names(self, mock_cls):
+        """imapclient hands flags as bytes and names as str in practice, but
+        servers and stubs vary; neither form may crash the lookup."""
+        client = MagicMock()
+        mock_cls.return_value = client
+        client.list_folders.return_value = [
+            (("\\Inbox",), "/", b"Inbox"),
+        ]
+        conn = ImapConnector("imap.example.com", 993, "u@e.com", "pw")
+        assert conn.resolve_inbox() == "Inbox"

@@ -171,9 +171,13 @@ def run_setup_imap(
     print(f"Testing IMAP connection to {host}:{port}...")
     imap = (imap_factory or ImapConnector)(host, port, email, password)
     try:
-        # Use a cheap read-only call; search_messages with limit=1 is enough
-        # to exercise login + folder select without paging much data.
-        imap.search_messages(mailbox="INBOX", limit=1)
+        # Cheap read-only call: login plus one folder select, no paging.
+        # The folder is the one the SERVER calls its inbox, not a folder we
+        # assume is named "INBOX". On an account where it is named otherwise,
+        # selecting "INBOX" fails with a protocol error and this probe would
+        # report a dead server or bad credentials for a mailbox that is in
+        # fact perfectly reachable.
+        imap.search_messages(mailbox=imap.resolve_inbox(), limit=1)
     except LoginError as exc:
         # Bad password — roll the entry back so the user can retry without
         # leaving a broken Keychain item that get_imap_password would
