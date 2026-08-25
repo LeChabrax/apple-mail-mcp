@@ -123,7 +123,10 @@ class TestElicitConfirmationFailsClosed:
         assert result is not None
         assert result["success"] is False
         assert result["error_type"] == "confirmation_required"
-        assert "context" in result["error"].lower()
+        # Le message dit desormais QUELLE phrase fournir, pour que le client
+        # puisse rejouer l'appel apres accord de la personne.
+        assert result["expected_confirmation"] == "OUI"
+        assert "confirmation" in result["error"].lower()
 
     async def test_returns_confirmation_required_when_elicit_raises(
         self, mock_ctx_raise: MagicMock,
@@ -4445,3 +4448,40 @@ class TestConnectorCreateDraftEdgeCase:
             connector.create_draft(
                 seed="reply", seed_id="160000", body="x"
             )
+
+
+class TestConfirmationParPhrase:
+    """La confirmation par phrase exacte, pour les clients sans elicitation."""
+
+    async def test_phrase_exacte_autorise(self) -> None:
+        from apple_mail_mcp.server import _elicit_confirmation
+        assert await _elicit_confirmation(
+            ctx=None, summary="Envoyer ?", operation="send_email",
+            params={}, confirmation="OUI ENVOIE",
+        ) is None
+
+    async def test_phrase_insensible_a_la_casse_et_aux_espaces(self) -> None:
+        from apple_mail_mcp.server import _elicit_confirmation
+        assert await _elicit_confirmation(
+            ctx=None, summary="Envoyer ?", operation="send_email",
+            params={}, confirmation="  oui envoie  ",
+        ) is None
+
+    async def test_mauvaise_phrase_refuse(self) -> None:
+        from apple_mail_mcp.server import _elicit_confirmation
+        r = await _elicit_confirmation(
+            ctx=None, summary="Envoyer ?", operation="send_email",
+            params={}, confirmation="oui",
+        )
+        assert r is not None and r["success"] is False
+        assert r["expected_confirmation"] == "OUI ENVOIE"
+
+    async def test_la_phrase_d_envoi_ne_vaut_pas_pour_une_suppression(self) -> None:
+        """Un « OUI ENVOIE » ne doit jamais valider un delete_messages."""
+        from apple_mail_mcp.server import _elicit_confirmation
+        r = await _elicit_confirmation(
+            ctx=None, summary="Supprimer ?", operation="delete_messages",
+            params={}, confirmation="OUI ENVOIE",
+        )
+        assert r is not None and r["success"] is False
+        assert r["expected_confirmation"] == "OUI SUPPRIME"

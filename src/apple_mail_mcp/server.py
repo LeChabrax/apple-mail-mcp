@@ -189,8 +189,35 @@ _register_pool_atexit(_imap_pool)
 mail = AppleMailConnector(imap_pool=_imap_pool, **_attachment_cap_overrides())
 
 
+# Phrase exacte attendue par operation quand le client ne sait pas afficher de
+# fenetre de confirmation. Le connecteur claude.ai et le chat Desktop
+# n'implementent pas l'elicitation MCP : sans ce chemin, toute operation gardee
+# echoue et devient inutilisable, et le seul contournement etait
+# APPLE_MAIL_MCP_AUTO_CONFIRM, qui ouvre les sept operations d'un coup, y
+# compris la suppression de messages et de boites.
+#
+# Ici la confirmation remonte dans la conversation : l'outil refuse, dit quelle
+# phrase fournir, l'humain la donne, l'appel est rejoue. La phrase est exacte et
+# differe par operation, pour qu'un « oui » distrait ne valide pas une
+# suppression a la place d'un envoi.
+_CONFIRMATION_PHRASES = {
+    "send_email": "OUI ENVOIE",
+    "delete_messages": "OUI SUPPRIME",
+    "delete_mailbox": "OUI SUPPRIME LA BOITE",
+    "delete_template": "OUI SUPPRIME LE MODELE",
+    "create_rule": "OUI CREE LA REGLE",
+    "update_rule": "OUI MODIFIE LA REGLE",
+    "delete_rule": "OUI SUPPRIME LA REGLE",
+}
+
+
+def _phrase_for(operation: str) -> str:
+    return _CONFIRMATION_PHRASES.get(operation, "OUI")
+
+
 async def _elicit_confirmation(
-    ctx: Context | None, summary: str, operation: str, params: dict[str, Any]
+    ctx: Context | None, summary: str, operation: str, params: dict[str, Any],
+    confirmation: str | None = None,
 ) -> dict[str, Any] | None:
     """Elicit user confirmation via MCP. Fails closed — confirmation gates
     the destructive operation entirely.
@@ -218,6 +245,24 @@ async def _elicit_confirmation(
     if os.environ.get("APPLE_MAIL_MCP_AUTO_CONFIRM", "").lower() == "true":
         operation_logger.log_operation(operation, params, "auto_confirmed")
         return None
+
+    expected = _phrase_for(operation)
+    if confirmation is not None:
+        if confirmation.strip().upper() == expected:
+            operation_logger.log_operation(operation, params, "phrase_confirmed")
+            return None
+        operation_logger.log_operation(operation, params, "phrase_mismatch")
+        return {
+            "success": False,
+            "error": (
+                f"Confirmation refusee : attendu {expected!r}, recu "
+                f"{confirmation.strip()!r}. Rien n'a ete fait."
+            ),
+            "error_type": "confirmation_required",
+            "expected_confirmation": expected,
+            "summary": summary,
+        }
+
     if ctx is None:
         operation_logger.log_operation(
             operation, params, "confirmation_required"
@@ -225,10 +270,13 @@ async def _elicit_confirmation(
         return {
             "success": False,
             "error": (
-                "User confirmation is required for this operation, but "
-                "the MCP client did not provide a confirmation context."
+                "Cette operation demande une confirmation. Montre le resume a "
+                "la personne, et si elle accepte, rappelle cet outil avec "
+                f'confirmation="{expected}".'
             ),
             "error_type": "confirmation_required",
+            "expected_confirmation": expected,
+            "summary": summary,
         }
     try:
         # mypy 1.20.x collapses every ctx.elicit overload to the
@@ -436,6 +484,7 @@ def _rule_actions_require_confirmation(actions: dict[str, Any]) -> bool:
 )
 async def delete_rule(
     rule_index: int,
+    confirmation: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """
@@ -480,7 +529,8 @@ async def delete_rule(
             f"This cannot be undone."
         )
         cancel_err = await _elicit_confirmation(
-            ctx, summary, "delete_rule", {"rule_index": rule_index}
+            ctx, summary, "delete_rule", {"rule_index": rule_index},
+            confirmation=confirmation,
         )
         if cancel_err:
             return cancel_err
@@ -522,6 +572,7 @@ async def create_rule(
     actions: AnyDict,
     match_logic: str = "all",
     enabled: bool = True,
+    confirmation: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """
@@ -584,7 +635,8 @@ async def create_rule(
             cancel_err = await _elicit_confirmation(
                 ctx, summary, "create_rule",
                 {"name": name, "dangerous_actions": dangerous},
-            )
+            confirmation=confirmation,
+        )
             if cancel_err:
                 return cancel_err
 
@@ -632,6 +684,7 @@ async def update_rule(
     conditions: DictList | None = None,
     actions: AnyDict | None = None,
     match_logic: str | None = None,
+    confirmation: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """
@@ -704,8 +757,9 @@ async def update_rule(
                 f"Previous condition/action state cannot be recovered."
             )
             cancel_err = await _elicit_confirmation(
-                ctx, summary, "update_rule", {"rule_index": rule_index}
-            )
+                ctx, summary, "update_rule", {"rule_index": rule_index},
+            confirmation=confirmation,
+        )
             if cancel_err:
                 return cancel_err
 
@@ -2076,6 +2130,7 @@ async def delete_mailbox(
     account: str,
     name: str,
     delete_messages: bool = False,
+    confirmation: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Delete a mailbox via IMAP.
@@ -2135,6 +2190,7 @@ async def delete_mailbox(
             ctx, summary, "delete_mailbox",
             {"account": account, "name": name,
              "delete_messages": delete_messages},
+            confirmation=confirmation,
         )
         if cancel_err:
             return cancel_err
@@ -2210,6 +2266,7 @@ async def delete_messages(
     permanent: bool = False,
     account: str | None = None,
     source_mailbox: str | None = None,
+    confirmation: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """
@@ -2292,6 +2349,7 @@ async def delete_messages(
             ctx, summary, "delete_messages",
             {"count": len(message_ids), "account": account,
              "source_mailbox": source_mailbox, "permanent": permanent},
+            confirmation=confirmation,
         )
         if cancel_err:
             return cancel_err
@@ -2482,7 +2540,8 @@ def save_template(
     mutating=True,
 )
 async def delete_template(
-    name: str, ctx: Context | None = None
+    name: str, confirmation: str | None = None,
+    ctx: Context | None = None
 ) -> dict[str, Any]:
     """Delete a template by name.
 
@@ -2508,7 +2567,8 @@ async def delete_template(
             f"This removes the file at ~/.apple_mail_mcp/templates/{name}.md."
         )
         cancel_err = await _elicit_confirmation(
-            ctx, summary, "delete_template", {"name": name}
+            ctx, summary, "delete_template", {"name": name},
+            confirmation=confirmation,
         )
         if cancel_err:
             return cancel_err
@@ -2845,6 +2905,7 @@ async def _run_send_now_gates(
     summary: str,
     elicit_extra: dict[str, Any],
     *,
+    confirmation: str | None = None,
     validate_recipient_shape: bool = False,
     validate_args: tuple[Any, ...] = (),
 ) -> dict[str, Any] | None:
@@ -2877,7 +2938,8 @@ async def _run_send_now_gates(
             }
     cancel_err = await _elicit_confirmation(
         ctx, summary, operation, elicit_extra,
-    )
+            confirmation=confirmation,
+        )
     if cancel_err:
         return cancel_err
     return None
