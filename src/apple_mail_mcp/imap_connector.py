@@ -22,6 +22,8 @@ See ``docs/plans/2026-04-23-imap-connector-design.md``.
 
 from __future__ import annotations
 
+from email.header import decode_header, make_header
+
 import logging
 import os
 import re
@@ -437,6 +439,26 @@ def _decode(b: bytes | bytearray | str | None) -> str:
     return b.decode("utf-8", errors="replace")
 
 
+def _decode_header(b: bytes | bytearray | str | None) -> str:
+    """Decode un en-tete RFC 2047 (« encoded-word ») en texte lisible.
+
+    Le chemin IMAP rend les en-tetes tels que le serveur les stocke : un objet
+    contenant un accent arrive encode, par exemple
+    ``=?utf-8?B?TGUgTcOpZGlh...?=`` ou ``=?Windows-1252?Q?RE:_Le_M=E9dia?=``.
+    Sans ce decodage, tout sujet francais accentue revient illisible — la
+    moitie des messages d'une boite francaise. Le chemin AppleScript ne
+    souffrait pas du probleme, Mail.app decodant lui-meme.
+    """
+    raw = _decode(b)
+    if "=?" not in raw:
+        return raw
+    try:
+        return str(make_header(decode_header(raw)))
+    except (UnicodeDecodeError, LookupError, ValueError):
+        # En-tete malforme : mieux vaut la forme encodee qu'une exception.
+        return raw
+
+
 def _strip_brackets(s: str) -> str:
     if s.startswith("<") and s.endswith(">"):
         return s[1:-1]
@@ -484,7 +506,7 @@ def _format_sender(envelope: Envelope) -> str:
     if not from_:
         return ""
     first = from_[0]
-    name = _decode(first.name)
+    name = _decode_header(first.name)
     mailbox = _decode(first.mailbox)
     host = _decode(first.host)
     email = f"{mailbox}@{host}" if mailbox and host else mailbox or ""
@@ -687,7 +709,7 @@ def _envelope_to_dict(
     return {
         "id": rfc_id,
         "rfc_message_id": rfc_id,
-        "subject": _decode(envelope.subject),
+        "subject": _decode_header(envelope.subject),
         "sender": _format_sender(envelope),
         "date_received": date_str,
         "read_status": _FLAG_SEEN in flags,
