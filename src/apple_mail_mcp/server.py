@@ -202,6 +202,10 @@ mail = AppleMailConnector(imap_pool=_imap_pool, **_attachment_cap_overrides())
 # suppression a la place d'un envoi.
 _CONFIRMATION_PHRASES = {
     "send_email": "OUI ENVOIE",
+    # create_draft et update_draft ne sont gardes QUE lorsqu'ils envoient
+    # (send_now=True) : la phrase attendue est donc celle de l'envoi.
+    "create_draft": "OUI ENVOIE",
+    "update_draft": "OUI ENVOIE",
     "delete_messages": "OUI SUPPRIME",
     "delete_mailbox": "OUI SUPPRIME LA BOITE",
     "delete_template": "OUI SUPPRIME LE MODELE",
@@ -3043,6 +3047,7 @@ async def create_draft(
     template_vars: StrDict | None = None,
     from_account: str | None = None,
     send_now: bool = False,
+    confirmation: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Create a draft (fresh, reply, or forward). Optionally send immediately.
@@ -3155,6 +3160,7 @@ async def create_draft(
                 seed_kind, to, cc, bcc, subject, body,
             )
             gate_err = await _run_send_now_gates(
+                confirmation=confirmation,
                 operation="create_draft",
                 ctx=ctx,
                 recipients=all_recipients,
@@ -3253,6 +3259,7 @@ async def update_draft(
     template_vars: StrDict | None = None,
     from_account: str | None = None,
     send_now: bool = False,
+    confirmation: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Update an existing draft. Implemented as delete-and-recreate.
@@ -3353,6 +3360,7 @@ async def update_draft(
             # validate_recipient_shape stays False — recipients came from
             # existing draft state, not fresh caller input. (#175 + #192)
             gate_err = await _run_send_now_gates(
+                confirmation=confirmation,
                 operation="update_draft",
                 ctx=ctx,
                 recipients=all_recipients,
@@ -3476,6 +3484,7 @@ async def send_email(
     cc: StrList | None = None,
     bcc: StrList | None = None,
     attachment_paths: StrList | None = None,
+    confirmation: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Send a new email immediately.
@@ -3503,6 +3512,7 @@ async def send_email(
         bcc=bcc,
         attachment_paths=attachment_paths,
         send_now=True,
+        confirmation=confirmation,
         ctx=ctx,
     )
 
@@ -3518,6 +3528,7 @@ async def reply(
     cc: StrList | None = None,
     seed_mailbox: str | None = None,
     send_now: bool = True,
+    confirmation: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Reply to an existing message.
@@ -3557,6 +3568,7 @@ async def reply_all(
     from_account: str | None = None,
     seed_mailbox: str | None = None,
     send_now: bool = True,
+    confirmation: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Reply to all recipients of an existing message.
@@ -3596,6 +3608,7 @@ async def forward(
     from_account: str | None = None,
     seed_mailbox: str | None = None,
     send_now: bool = True,
+    confirmation: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Forward an existing message to new recipients.

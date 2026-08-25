@@ -4485,3 +4485,29 @@ class TestConfirmationParPhrase:
         )
         assert r is not None and r["success"] is False
         assert r["expected_confirmation"] == "OUI SUPPRIME"
+
+
+class TestConfirmationEnvoi:
+    """La phrase doit traverser send_email -> create_draft -> les gardes."""
+
+    async def test_send_email_expose_la_confirmation(self) -> None:
+        import inspect
+        from apple_mail_mcp.server import send_email
+        fn = getattr(send_email, "fn", send_email)
+        assert "confirmation" in inspect.signature(fn).parameters
+
+    async def test_create_draft_expose_la_confirmation(self) -> None:
+        import inspect
+        from apple_mail_mcp.server import create_draft
+        fn = getattr(create_draft, "fn", create_draft)
+        assert "confirmation" in inspect.signature(fn).parameters
+
+    async def test_les_gates_d_envoi_acceptent_la_phrase(self) -> None:
+        from apple_mail_mcp.server import _run_send_now_gates
+        import inspect
+        assert "confirmation" in inspect.signature(_run_send_now_gates).parameters
+
+    async def test_phrase_d_envoi_pour_create_draft(self) -> None:
+        from apple_mail_mcp.server import _phrase_for
+        assert _phrase_for("create_draft") == "OUI ENVOIE"
+        assert _phrase_for("update_draft") == "OUI ENVOIE"
