@@ -127,6 +127,27 @@ _FLAG_SEEN = b"\\Seen"
 _FLAG_FLAGGED = b"\\Flagged"
 
 
+# Mail.app rapporte le port que le compte utilise reellement, et c'est souvent
+# 143 : le port IMAP en clair, sur lequel la session est chiffree APRES coup par
+# STARTTLS. Ouvrir une session TLS directe dessus echoue a la poignee de main
+# ("record layer failure"), le connecteur retombe sur AppleScript, et le chemin
+# rapide reste inatteignable meme avec un mot de passe valide dans le trousseau.
+# Constate le 2026-08-25 sur ssl0.ovh.net:143, ou le SEARCH repond en 0,02 s une
+# fois la connexion correctement negociee.
+#
+# Regle : 993 (et tout autre port) = TLS implicite ; 143 = clair puis STARTTLS.
+_STARTTLS_PORT = 143
+
+
+def _connect_imap(host, port, timeout):
+    """Ouvre une connexion IMAP en negociant le bon mode TLS pour ce port."""
+    if int(port) == _STARTTLS_PORT:
+        client = IMAPClient(host, port=port, ssl=False, timeout=timeout)
+        client.starttls()
+        return client
+    return IMAPClient(host, port=port, ssl=True, timeout=timeout)
+
+
 # ---------------------------------------------------------------------------
 # Connection pool (issue #75)
 # ---------------------------------------------------------------------------
@@ -209,9 +230,7 @@ class ImapConnectionPool:
                         entry.client.logout()
                     except Exception:  # noqa: BLE001 — best effort
                         pass
-                client = IMAPClient(
-                    host, port=port, ssl=True, timeout=connect_timeout
-                )
+                client = _connect_imap(host, port, connect_timeout)
                 client.login(email, password)
                 _apply_operation_timeout(client)
                 entry = _PooledClient(client=client)
@@ -712,9 +731,7 @@ class ImapConnector:
                 yield client
             return
 
-        client = IMAPClient(
-            self._host, port=self._port, ssl=True, timeout=self._connect_timeout
-        )
+        client = _connect_imap(self._host, self._port, self._connect_timeout)
         try:
             client.login(self._email, self._password)
             _apply_operation_timeout(client)
