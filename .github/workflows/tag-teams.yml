@@ -1,0 +1,26 @@
+name: Miroir du tag teams
+
+# Les postes equipes avant le 2026-08-25 portent `@teams` en dur dans leur
+# configuration Claude Desktop : le tag ne peut pas disparaitre sans les casser.
+# Il ne decide plus rien pour autant. Il suit `main`, automatiquement, pour que
+# ces postes recoivent la meme chose que les nouveaux.
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Deplacer teams sur main
+        run: |
+          set -euo pipefail
+          git tag -f teams "$GITHUB_SHA"
+          git push -f origin teams
+          echo "teams -> $GITHUB_SHA"

@@ -8,12 +8,13 @@
 # piped one never touches the filesystem. It also means you are running
 # whatever that URL serves, so read it first if that matters to you.
 #
-# The version installed is the REF below, not whatever main happens to be:
-# every machine that runs this command gets the same code.
+# La version installee est la REF ci-dessous. `main` est l'etat livrable : on ne
+# committe pas dessus, on y merge une branche terminee. Un merge vaut donc une
+# livraison a tous les postes, au prochain demarrage de Claude Desktop.
 
 set -eu
 
-REF="${APPLE_MAIL_MCP_REF:-teams}"
+REF="${APPLE_MAIL_MCP_REF:-main}"
 REPO="https://github.com/LeChabrax/apple-mail-mcp"
 SERVER="apple-mail-mcp"
 
