@@ -7,9 +7,9 @@ An MCP server that provides programmatic access to Apple Mail, enabling AI assis
 
 > ⚠️ **Pre-1.0 — expect breaking changes.** The MCP tool surface (tool names, parameters, return shapes) is still evolving as the project matures. Pin to a specific version (for example, `apple-mail-mcp==0.10.2`) and review the [CHANGELOG](CHANGELOG.md) before upgrading.
 
-## Tools (29)
+## Tools (31)
 
-Grouped by lifecycle (10 read-only, 19 mutating):
+Grouped by lifecycle (11 read-only, 20 mutating):
 
 - **Discovery** — `list_accounts`, `list_mailboxes`, `list_rules`, `list_templates`: enumerate what's configured (no external cache — call per account).
 - **Read** — `search_messages`, `get_messages`, `get_thread`, `get_attachment_content`, `get_template`, `render_template`: read messages/threads, pull an attachment's content inline, and render templates.
@@ -17,6 +17,7 @@ Grouped by lifecycle (10 read-only, 19 mutating):
 - **Drafts** — `create_draft` (new / reply / forward, optionally `send_now`), `update_draft`, `delete_draft`.
 - **Direct send** — `send_email`, `reply`, `reply_all`, `forward`: send in a single call, without going through a draft. Each one sends for real; there is no second confirmation step inside Mail.
 - **Accounts** — `delete_account`: remove a configured account from Mail.app.
+- **IMAP fast path** — `imap_status`: per-account verdict on whether server-side search is actually live, plus the installed commit (read-only, no password). `setup_imap`: store and verify an account's IMAP password from the conversation, instead of the `setup-imap` CLI.
 - **Mailbox CRUD** — `create_mailbox`, `update_mailbox` (rename or move), `delete_mailbox`.
 - **Rules** — `create_rule`, `update_rule`, `delete_rule`.
 - **Templates (write)** — `save_template`, `delete_template`.
@@ -82,16 +83,20 @@ On first run, macOS will prompt for Automation access. Grant permission in:
 
 ## Optional: faster search via IMAP
 
-`search_messages` works out of the box via AppleScript. For large mailboxes (thousands of messages), AppleScript's `whose` clause can take 1–5 seconds per query. If you want faster server-side search, you can enable IMAP delegation per account by adding a Keychain entry.
+`search_messages` works out of the box via AppleScript. For large mailboxes (thousands of messages), AppleScript's `whose` clause can take 1–5 seconds per query — and a body/text search is far worse: 37s on a real mailbox where IMAP answers the same query in 3s, minutes on a cold cache. If you want faster server-side search, you can enable IMAP delegation per account by adding a Keychain entry.
+
+**Check what's live first.** The fallback below is silent, so a mailbox that feels slow looks exactly like one that is simply large. `apple-mail-mcp status` prints, for every account, the host and port in use, whether a password is stored, and what a real connection returns — read-only, no password asked. It also prints the installed commit, which is the only way to tell an MCP server started before an update from one running the current code.
 
 **How it works.** If credentials exist for an account, the server uses IMAP (fast, server-side SEARCH). Otherwise — or on any IMAP failure (offline, wrong password, timeout) — it silently falls back to AppleScript. You never lose functionality; you only gain speed when IMAP is configured and reachable. The normal opt-in is a Keychain entry (below); an environment-variable fallback ([further down](#environment-variable-fallback-uvx--headless--ci)) covers contexts where the Keychain isn't usable.
 
 **One-time setup per account.**
 
-1. Generate an app-specific password at your provider. The procedure varies:
+1. Get the password the IMAP server expects. On most providers — a self-hosted server, OVH, Infomaniak, any generic IMAP host — that is simply **the mailbox password**, and there is nothing to generate. Do not demand an app-specific password where none exists; that advice costs an hour of hunting for a setting that isn't there. Providers that DO require one, because they refuse a plain password over IMAP:
    - **iCloud:** [appleid.apple.com/account/manage](https://appleid.apple.com/account/manage) → App-Specific Passwords. Requires 2FA on your Apple ID (default).
    - **Gmail:** [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords). Requires 2-Step Verification on your Google account.
    - **Yahoo / Fastmail / AOL:** generate an app password in the provider's account-security settings.
+
+   It is never the macOS login password, and it cannot be read out of Mail.app: its credentials live in the protected keychain, ACL-bound to Mail.app.
 
 2. Run the `setup-imap` subcommand. It prompts for the password (no echo), writes the Keychain entry, and verifies by connecting:
    ```bash
@@ -104,6 +109,8 @@ On first run, macOS will prompt for Automation access. Grant permission in:
    - opens an IMAP connection and runs a real LOGIN to confirm the password works. On rejection it rolls back the Keychain entry so you can retry without leaving a broken item behind.
 
 3. If you see a one-time "security wants to use the 'login' keychain" prompt on the next IMAP-backed call, click **Always Allow**.
+
+4. Confirm with `apple-mail-mcp status`. A `WARNING: IMAP verification could not complete` at step 2 means the entry was written but never proved against the server — the account stays on the slow path, silently.
 
 To remove the entry later: `apple-mail-mcp setup-imap --account iCloud --uninstall`.
 
