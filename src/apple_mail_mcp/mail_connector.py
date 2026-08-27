@@ -75,6 +75,10 @@ _IMAP_FALLBACK_EXCS: tuple[type[Exception], ...] = (
     IMAPClientError,
     MailImapMoveUnsupportedError,
     MailImapTrashNotFoundError,
+    # Un critere hors ASCII faisait planter imaplib avant tout octet reseau.
+    # Corrige a la source (imap_connector._force_utf8), garde ici en filet :
+    # une recherche lente vaut mieux qu'une trace de pile.
+    UnicodeEncodeError,
 )
 
 logger = logging.getLogger(__name__)

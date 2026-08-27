@@ -195,7 +195,27 @@ def run_setup_imap(
         )
         _maybe_print_icloud_login_hint(cli_email, host, email)
         return 1
-    except (OSError, IMAPClientError) as exc:
+    except Exception as exc:  # noqa: BLE001 - see the rollback note below
+        # Anything the probe itself raised, not a rejection by the server:
+        # network error, protocol error, or a client-side crash before the
+        # first byte (a non-ASCII password used to die here). The password may
+        # be fine and we cannot tell — but the entry has already been written,
+        # so a crash used to leave a Keychain item nobody asked for. Keep the
+        # entry only for the transport errors we understand; roll back the
+        # rest so a retry starts clean.
+        if not isinstance(exc, (OSError, IMAPClientError)):
+            try:
+                delete_imap_password(account_name, email)
+            except MailKeychainError:
+                pass
+            if cli_email:
+                delete_login_override(account_name)
+            print(
+                f"ERROR: IMAP verification crashed ({type(exc).__name__}: "
+                f"{exc}). The Keychain entry has been removed.",
+                file=sys.stderr,
+            )
+            return 1
         # Network / protocol error. The password may be fine but we can't
         # verify right now. Keep the entry; warn explicitly.
         print(

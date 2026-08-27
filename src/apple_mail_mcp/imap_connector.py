@@ -141,13 +141,39 @@ _FLAG_FLAGGED = b"\\Flagged"
 _STARTTLS_PORT = 143
 
 
+def _force_utf8(client: IMAPClient) -> IMAPClient:
+    """Fait encoder les commandes IMAP en UTF-8 plutot qu'en ASCII.
+
+    imaplib encode chaque argument de commande avec ``self._encoding``, fixe a
+    "ascii". Un seul caractere accentue leve alors UnicodeEncodeError AVANT le
+    moindre octet reseau — un mot de passe francais rend LOGIN impossible, et
+    une recherche sur "cafe" avec accent casse au lieu de chercher. Mail.app
+    envoie ces memes identifiants en UTF-8 et les serveurs les acceptent : on
+    fait pareil. Voir aussi le charset des criteres dans search_messages.
+    """
+    client._imap._encoding = "utf-8"
+    return client
+
+
+def _needs_utf8_charset(criteria: list[Any]) -> bool:
+    """Dit si un critere de recherche sort de l'ASCII.
+
+    Le charset ne se passe qu'au besoin : un SEARCH sans CHARSET reste le
+    comportement historique pour les recherches ASCII, sur lequel tous les
+    serveurs s'accordent.
+    """
+    return any(
+        isinstance(c, str) and not c.isascii() for c in criteria
+    )
+
+
 def _connect_imap(host, port, timeout):
     """Ouvre une connexion IMAP en negociant le bon mode TLS pour ce port."""
     if int(port) == _STARTTLS_PORT:
         client = IMAPClient(host, port=port, ssl=False, timeout=timeout)
         client.starttls()
-        return client
-    return IMAPClient(host, port=port, ssl=True, timeout=timeout)
+        return _force_utf8(client)
+    return _force_utf8(IMAPClient(host, port=port, ssl=True, timeout=timeout))
 
 
 # ---------------------------------------------------------------------------
@@ -824,7 +850,11 @@ class ImapConnector:
         with self._session() as client:
             client.select_folder(mailbox, readonly=True)
 
-            uids = client.search(criteria)
+            uids = (
+                client.search(criteria, charset="UTF-8")
+                if _needs_utf8_charset(criteria)
+                else client.search(criteria)
+            )
             # `limit` bounds MATCHING results. With no post-filter, every
             # candidate matches, so truncating the window up front is both
             # correct and the cheapest possible FETCH. With has_attachment

@@ -200,6 +200,50 @@ class TestTextFilters:
         )
 
 
+class TestNonAsciiCriteria:
+    """Un critere accentue partait en ASCII et cassait avant tout octet reseau."""
+
+    @patch("apple_mail_mcp.imap_connector.IMAPClient")
+    def test_accented_text_passes_utf8_charset(self, mock_cls):
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.search.return_value = []
+
+        ImapConnector("h", 993, "u@e.com", "pw").search_messages(
+            text_contains="café"
+        )
+
+        mock_client.search.assert_called_once_with(
+            ["TEXT", "café"], charset="UTF-8"
+        )
+
+    @patch("apple_mail_mcp.imap_connector.IMAPClient")
+    def test_ascii_search_keeps_historic_call(self, mock_cls):
+        # Le charset ne se pose qu'au besoin : sans lui, le comportement des
+        # recherches ASCII reste exactement celui d'avant.
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.search.return_value = []
+
+        ImapConnector("h", 993, "u@e.com", "pw").search_messages(
+            text_contains="invoice"
+        )
+
+        mock_client.search.assert_called_once_with(["TEXT", "invoice"])
+
+    @patch("apple_mail_mcp.imap_connector.IMAPClient")
+    def test_connection_encodes_commands_in_utf8(self, mock_cls):
+        # LOGIN passe par le meme encodage : un mot de passe accentue doit
+        # atteindre le serveur au lieu de lever UnicodeEncodeError.
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.search.return_value = []
+
+        ImapConnector("h", 993, "u@e.com", "mot-de-passé").search_messages()
+
+        assert mock_client._imap._encoding == "utf-8"
+
+
 class TestFlagFilters:
     @patch("apple_mail_mcp.imap_connector.IMAPClient")
     def test_read_status_true_maps_to_seen(self, mock_cls):

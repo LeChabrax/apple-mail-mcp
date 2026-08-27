@@ -328,6 +328,43 @@ class TestSetupFailurePaths:
         assert "IMAP login was rejected" in err
         assert "removed" in err
 
+    def test_probe_crash_rolls_back_keychain_entry(
+        self,
+        mock_connector: MagicMock,
+        mock_imap_client: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Une sonde qui plante cote client (le cas historique : mot de passe
+        # accentue, UnicodeEncodeError avant tout octet reseau) laissait
+        # derriere elle une entree Keychain que personne n'avait validee.
+        from apple_mail_mcp import cli as cli_mod
+
+        delete_calls: list[tuple[str, str]] = []
+        monkeypatch.setattr(cli_mod, "set_imap_password", lambda a, e, p: None)
+        monkeypatch.setattr(
+            cli_mod, "delete_imap_password",
+            lambda a, e: delete_calls.append((a, e)),
+        )
+
+        mock_imap_client.resolve_inbox.side_effect = UnicodeEncodeError(
+            "ascii", "passé", 4, 5, "ordinal not in range(128)"
+        )
+
+        rc = run_setup_imap(
+            account_name="iCloud",
+            cli_email=None,
+            uninstall=False,
+            connector_factory=lambda: mock_connector,
+            getpass_fn=lambda prompt: "mot-de-passé",
+            imap_factory=lambda *a, **k: mock_imap_client,
+        )
+        assert rc == 1
+        assert delete_calls == [("iCloud", "alice@icloud.com")]
+        err = capsys.readouterr().err
+        assert "verification crashed" in err
+        assert "removed" in err
+
     def test_network_error_keeps_entry_with_warning(
         self,
         mock_connector: MagicMock,
