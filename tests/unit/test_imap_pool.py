@@ -77,12 +77,15 @@ class TestSessionReuse:
 
 
 class TestOperationTimeout:
-    """#249: connect/login bounded by the short connect timeout, then the
-    socket read timeout is raised to OPERATION_TIMEOUT_S for SEARCH/FETCH so
-    a slow server-side search isn't killed mid-operation."""
+    """#249: the TCP connect is bounded by the short connect timeout, then the
+    socket read timeout is raised to OPERATION_TIMEOUT_S for LOGIN and for
+    SEARCH/FETCH, so neither a slow login nor a slow server-side search is
+    killed mid-operation. LOGIN moved inside the long budget after an OVH
+    Hosted Exchange mailbox was measured answering it in ~10s: under the 3s
+    connect budget every IMAP call failed and fell back to AppleScript."""
 
     @patch("apple_mail_mcp.imap_connector.IMAPClient")
-    def test_connect_short_then_operation_timeout_raised_post_login(
+    def test_connect_short_then_operation_timeout_raised_before_login(
         self, mock_cls: MagicMock, pool: ImapConnectionPool
     ) -> None:
         client = MagicMock()
@@ -95,12 +98,12 @@ class TestOperationTimeout:
         mock_cls.assert_called_once_with(
             "h", port=993, ssl=True, timeout=CONNECT_TIMEOUT_S
         )
-        # ...and after login the socket is raised to the operation timeout.
+        # ...and the socket is raised to the operation timeout before login.
         client.login.assert_called_once_with("u@e.com", "pw")
         client.socket().settimeout.assert_called_once_with(OPERATION_TIMEOUT_S)
-        # Ordering: settimeout happens after login, not before.
+        # Ordering: settimeout happens before login, so a slow LOGIN survives.
         names = [c[0] for c in client.mock_calls]
-        assert names.index("login") < names.index("socket().settimeout")
+        assert names.index("socket().settimeout") < names.index("login")
 
     @patch("apple_mail_mcp.imap_connector.IMAPClient")
     def test_reused_session_keeps_single_timeout_application(

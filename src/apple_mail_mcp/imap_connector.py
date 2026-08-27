@@ -88,8 +88,14 @@ def _env_timeout(env_name: str, default: float) -> float:
 CONNECT_TIMEOUT_S: float = _env_timeout("APPLE_MAIL_MCP_CONNECT_TIMEOUT_S", 3.0)
 """Per invariant 4 in imap-auth-options-decision.md: ≤3s so offline
 fallback happens inside the graceful-degradation window without
-waiting for TCP's default timeout. Bounds connect + login only — once
-logged in the socket timeout is raised to OPERATION_TIMEOUT_S (#249).
+waiting for TCP's default timeout. Bounds the TCP connect ONLY: the socket
+timeout is raised to OPERATION_TIMEOUT_S before LOGIN, not after (#249).
+
+LOGIN is a server-side operation, not a reachability probe. An OVH Hosted
+Exchange mailbox answers LOGIN in about 10s — measured, twice — so binding
+it to a 3s budget made every IMAP call fail and silently drop to the
+AppleScript path. Offline detection stays fast because an unreachable host
+fails at connect, well before any credential is sent.
 
 Override with APPLE_MAIL_MCP_CONNECT_TIMEOUT_S (raising it delays offline
 detection, so prefer leaving this one alone)."""
@@ -259,8 +265,8 @@ class ImapConnectionPool:
                     except Exception:  # noqa: BLE001 — best effort
                         pass
                 client = _connect_imap(host, port, connect_timeout)
-                client.login(email, password)
                 _apply_operation_timeout(client)
+                client.login(email, password)
                 entry = _PooledClient(client=client)
                 self._cache[key] = entry
 
@@ -781,8 +787,8 @@ class ImapConnector:
 
         client = _connect_imap(self._host, self._port, self._connect_timeout)
         try:
-            client.login(self._email, self._password)
             _apply_operation_timeout(client)
+            client.login(self._email, self._password)
             yield client
         finally:
             client.logout()

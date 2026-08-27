@@ -116,12 +116,13 @@ class TestSearchHappyPath:
         assert len(result) == 3
 
         # #249: connect uses the short timeout (asserted above), then the
-        # socket is raised to the operation timeout after login.
+        # socket is raised to the operation timeout before login — a LOGIN is
+        # a server-side operation, not a reachability probe.
         mock_client.socket().settimeout.assert_called_once_with(
             OPERATION_TIMEOUT_S
         )
         names = [c[0] for c in mock_client.mock_calls]
-        assert names.index("login") < names.index("socket().settimeout")
+        assert names.index("socket().settimeout") < names.index("login")
 
     @patch("apple_mail_mcp.imap_connector.IMAPClient")
     def test_empty_search_result_skips_fetch(self, mock_cls):
@@ -242,6 +243,28 @@ class TestNonAsciiCriteria:
         ImapConnector("h", 993, "u@e.com", "mot-de-passé").search_messages()
 
         assert mock_client._imap._encoding == "utf-8"
+
+
+class TestLoginTimeoutBudget:
+    """LOGIN est une operation serveur, pas une sonde de joignabilite."""
+
+    @patch("apple_mail_mcp.imap_connector.IMAPClient")
+    def test_operation_timeout_applied_before_login(self, mock_cls):
+        # Une boite OVH Hosted Exchange repond au LOGIN en ~10s. Tant que le
+        # login tenait dans le budget de connexion (3s), tout appel IMAP
+        # echouait et retombait en silence sur AppleScript, 10x plus lent.
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.search.return_value = []
+        ordre: list[str] = []
+        mock_client.socket.return_value.settimeout.side_effect = (
+            lambda t: ordre.append(f"settimeout:{t}")
+        )
+        mock_client.login.side_effect = lambda *a: ordre.append("login")
+
+        ImapConnector("h", 993, "u@e.com", "pw").search_messages()
+
+        assert ordre[:2] == [f"settimeout:{OPERATION_TIMEOUT_S}", "login"]
 
 
 class TestFlagFilters:
