@@ -2822,9 +2822,16 @@ class AppleMailConnector:
         gets working threading via AppleScript.
 
         Args:
-            message_id: Internal Mail.app id of any message in the thread
-                (the anchor). Typically obtained from search_messages or
-                get_message results.
+            message_id: Id of any message in the thread (the anchor), sous
+                l'une des DEUX formes que les outils de lecture rendent :
+                l'id interne numerique de Mail.app, ou le Message-ID RFC 5322
+                que le chemin IMAP place dans `id`. Chercher uniquement le
+                premier faisait echouer « cherche puis ouvre le fil » des que
+                le chemin rapide etait actif — mesure le 2026-08-27, et meme
+                cause pour un `reply_to` refuse. Les deux predicats restent
+                dans des clauses `whose` SEPAREES : combinees, la comparaison
+                entiere `id is X` empoisonne le `or` pour un id RFC et ne
+                trouve plus rien (voir _message_lookup_fragment).
 
         Returns:
             List of message dicts sorted by date_received ascending. Each
@@ -3318,7 +3325,11 @@ class AppleMailConnector:
             repeat with acc in accounts
                 repeat with mb in mailboxes of acc
                     try
-                        set msg to first message of mb whose id is "{message_id_safe}"
+                        try
+                            set msg to first message of mb whose id is "{message_id_safe}"
+                        on error
+                            set msg to first message of mb whose (message id is "{message_id_safe}" or message id is ("<" & "{message_id_safe}" & ">"))
+                        end try
                         set anchorInReplyTo to ""
                         set anchorRefs to ""
                         try
