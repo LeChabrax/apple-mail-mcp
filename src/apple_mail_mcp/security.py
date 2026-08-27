@@ -140,6 +140,8 @@ OPERATION_TIERS: dict[str, str] = {
     # IMAP setup (#…) — a live login probe against the mail server plus a
     # Keychain write; rare, and as costly as any other AppleScript round-trip.
     "setup_imap": "expensive_ops",
+    # Sonde de connexion reelle sur chaque compte : meme cout qu'une recherche.
+    "imap_status": "expensive_ops",
     # Drafts lifecycle (#134) — create_draft / update_draft tier under
     # "sends" because their gate chain only fires on send_now=True
     # (which is the actual send action). delete_draft tiers under

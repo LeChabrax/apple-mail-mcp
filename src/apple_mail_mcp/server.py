@@ -378,6 +378,49 @@ def list_accounts() -> dict[str, Any]:
 
 
 @_tool(
+    {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True}
+)
+def imap_status() -> dict[str, Any]:
+    """
+    Say, per account, whether the IMAP fast path is actually live.
+
+    The AppleScript fallback is silent: when IMAP fails the connector logs a
+    line nobody reads and answers anyway, in minutes instead of seconds. Call
+    this before blaming a slow search on the mailbox size — it names the
+    account, the host and port in use, whether a password is stored, and what
+    a real connection attempt returns.
+
+    The report also carries the installed commit. An MCP server started before
+    an update keeps running the old code, which no other output reveals.
+
+    Takes no password and returns none.
+
+    Returns:
+        Dictionary with the installed commit and one verdict per account.
+
+    Example:
+        >>> imap_status()
+        {"success": True, "commit": "b927abb...", "fast_path_count": 1,
+         "accounts": [{"account": "Exchange", "host": "ex2.mail.ovh.net",
+                       "port": 993, "keychain": True, "verdict": "ok"}]}
+    """
+    try:
+        rate_err = check_rate_limit("imap_status", {})
+        if rate_err:
+            return rate_err
+
+        from .imap_status import imap_status as _report
+
+        report = _report(mail)
+        operation_logger.log_operation("imap_status", {}, "success")
+        return {"success": True, **report}
+
+    except Exception as e:
+        logger.error(f"Error reporting IMAP status: {e}")
+        return {"success": False, "error": str(e), "error_type": "unknown"}
+
+
+@_tool(
     {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True},
     mutating=True,
 )
@@ -3761,7 +3804,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--read-only",
         action="store_true",
         help=(
-            "Start the server with only the 10 read-only tools registered "
+            "Start the server with only the 11 read-only tools registered "
             "(skips the 20 mutating tools). Pair with a second non-read-only "
             "server entry in your MCP client to batch-approve reads while "
             "still gating writes per call. See docs/reference/TOOLS.md."
@@ -3789,6 +3832,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "Defaults to the first email in Mail.app's account configuration."
         ),
     )
+    sub.add_parser(
+        "status",
+        help=(
+            "Report, per account, whether the IMAP fast path is live: host, "
+            "port, stored password, and what a real connection returns."
+        ),
+    )
+
     setup_imap.add_argument(
         "--uninstall",
         action="store_true",
@@ -3810,6 +3861,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 
+    if args.command == "status":
+        from .imap_status import main as status_main
+
+        return status_main()
+
     if args.command == "setup-imap":
         from .cli import run_setup_imap
 
@@ -3822,7 +3878,7 @@ def main(argv: list[str] | None = None) -> int:
     if _READ_ONLY:
         logger.info(
             "Read-only mode: 20 mutating tools skipped (--read-only). "
-            "Only the 9 read tools are registered."
+            "Only the 11 read tools are registered."
         )
     logger.info("Starting Apple Mail MCP server")
     mcp.run()

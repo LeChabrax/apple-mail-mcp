@@ -59,6 +59,7 @@ EXPECTED_TOOLS = {
     "reply",
     "reply_all",
     "forward",
+    "imap_status",
     "setup_imap",
     "render_template",
 }
