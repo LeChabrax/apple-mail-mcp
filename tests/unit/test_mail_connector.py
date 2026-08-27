@@ -916,6 +916,36 @@ class TestAppleMailConnector:
         assert result == ("imap.gmail.com", 993, "me@gmail.com")
 
     @patch.object(AppleMailConnector, "_run_applescript")
+    def test_resolve_imap_config_missing_port_assumes_imaps(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        """Un compte Exchange natif ne declare aucun port IMAP : Mail.app rend
+        0, alors que le serveur repond bien en IMAPS. Mesure sur OVH Hosted
+        Exchange. Se connecter au port 0 echoue en "Can't assign requested
+        address" et fait retomber chaque appel sur AppleScript."""
+        mock_run.return_value = (
+            '{"host":"ex2.mail.ovh.net",'
+            '"port":0,'
+            '"user_name":"hugues@example.com",'
+            '"email_addresses":["hugues@example.com"]}'
+        )
+        result = connector._resolve_imap_config("Exchange")
+        assert result == ("ex2.mail.ovh.net", 993, "hugues@example.com")
+
+    @patch.object(AppleMailConnector, "_run_applescript")
+    def test_resolve_imap_config_missing_host_keeps_port_zero(
+        self, mock_run: MagicMock, connector: AppleMailConnector
+    ) -> None:
+        """Sans hote (POP, "Sur mon Mac", compte en cours de configuration),
+        rien a deviner : on laisse echouer le connect, chemin de repli."""
+        mock_run.return_value = (
+            '{"host":"","port":0,"user_name":"x@example.com",'
+            '"email_addresses":["x@example.com"]}'
+        )
+        result = connector._resolve_imap_config("Local")
+        assert result == ("", 0, "x@example.com")
+
+    @patch.object(AppleMailConnector, "_run_applescript")
     def test_resolve_imap_config_icloud_third_party_apple_id_uses_icloud_alias(
         self, mock_run: MagicMock, connector: AppleMailConnector
     ) -> None:

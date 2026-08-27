@@ -81,6 +81,9 @@ _IMAP_FALLBACK_EXCS: tuple[type[Exception], ...] = (
     UnicodeEncodeError,
 )
 
+_DEFAULT_IMAPS_PORT = 993
+"""Port IMAPS standard, retenu quand Mail.app ne declare aucun port."""
+
 logger = logging.getLogger(__name__)
 
 # Strict ISO 8601 YYYY-MM-DD — search_messages's date_from/date_to filters
@@ -1830,11 +1833,19 @@ class AppleMailConnector:
         override = get_login_override(account)
         if override:
             email = override
-        return (
-            host,
-            cast(int, parsed.get("port") or 0),
-            email,
-        )
+        # Mail.app reports `port` as 0 for an account it does not drive over
+        # IMAP itself — a native Exchange account, for instance, which talks
+        # EWS and has no IMAP port to give even when its server DOES answer
+        # IMAP on the standard port (measured on OVH Hosted Exchange:
+        # ex2.mail.ovh.net offers IMAP4 on 993 while Mail.app reports 0).
+        # Connecting to port 0 dies with "Can't assign requested address" and
+        # every call silently falls back to AppleScript. When the host is
+        # known but the port is not, assume IMAPS rather than give up: a
+        # wrong guess fails the same way an absent port already did.
+        port = cast(int, parsed.get("port") or 0)
+        if port <= 0 and host:
+            port = _DEFAULT_IMAPS_PORT
+        return (host, port, email)
 
     def _imap_search(
         self,
