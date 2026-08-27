@@ -1850,7 +1850,7 @@ class AppleMailConnector:
     def _imap_search(
         self,
         account: str,
-        mailbox: str = "INBOX",
+        mailbox: str | None = "INBOX",
         sender_contains: str | None = None,
         subject_contains: str | None = None,
         read_status: bool | None = None,
@@ -1881,6 +1881,12 @@ class AppleMailConnector:
         host, port, email = self._resolve_imap_config(account)
         password = self._get_imap_password_with_fallback(account, email)
         imap = ImapConnector(host, port, email, password, pool=self._imap_pool)
+        # mailbox=None : le serveur IMAP nomme lui-meme sa boite de reception
+        # (RFC 6154). Le demander a Mail.app couterait un aller-retour
+        # AppleScript avant meme d'ouvrir la connexion, sur le chemin dont
+        # l'interet est justement de ne pas passer par Mail.app.
+        if mailbox is None:
+            mailbox = imap.resolve_inbox()
         return imap.search_messages(
             mailbox=mailbox,
             sender_contains=sender_contains,
@@ -1942,8 +1948,14 @@ class AppleMailConnector:
         by asking Mail rather than assuming the name "INBOX". Pass a name
         explicitly to search anywhere else.
         """
-        if mailbox is None:
-            mailbox = self.resolve_inbox_name(account, on_warning=on_warning)
+        # La resolution de la boite de reception est DIFFEREE. Elle passait ici
+        # par Mail.app, avant tout choix de chemin : sur un compte lent — une
+        # boite Exchange, un Mail occupe — ce seul aller-retour AppleScript
+        # consommait les 60 s de budget et faisait expirer la recherche, alors
+        # que l'IMAP repondait en une demi-seconde. Mesure du 2026-08-27 : un
+        # compte dont `imap_status` disait « chemin rapide actif, 0,52 s »
+        # rendait quand meme un timeout a chaque recherche.
+        # Chaque chemin resout donc la sienne, avec ses propres moyens.
         body_search = bool(body_contains or text_contains)
 
         # #230: received_within_hours is a hour-granular relative cutoff that
@@ -2000,6 +2012,9 @@ class AppleMailConnector:
                 f"`apple-mail-mcp setup-imap --account {account!r}` for "
                 f"sub-second IMAP body search."
             )
+
+        if mailbox is None:
+            mailbox = self.resolve_inbox_name(account, on_warning=on_warning)
 
         start = time.perf_counter()
         try:

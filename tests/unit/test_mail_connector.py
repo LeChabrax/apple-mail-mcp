@@ -8398,3 +8398,64 @@ class TestInboxCacheInvalidation:
         connector._cache_inbox["Vieux"] = "INBOX"
         connector.delete_account("UUID-1")
         assert connector._cache_inbox == {}
+
+
+class TestResolutionBoiteDifferee:
+    """La boite de reception se resout sur le chemin choisi, pas avant lui.
+
+    Elle passait par Mail.app d'entree, avant tout choix de chemin. Sur un
+    compte lent — une boite Exchange, un Mail occupe — ce seul aller-retour
+    AppleScript consommait les 60 s de budget et faisait expirer la recherche,
+    alors que l'IMAP repondait en une demi-seconde. Mesure du 2026-08-27 : un
+    compte dont `imap_status` disait « chemin rapide actif, 0,52 s » rendait
+    quand meme un timeout a chaque recherche.
+    """
+
+    @pytest.fixture
+    def connector(self) -> AppleMailConnector:
+        return AppleMailConnector(timeout=30)
+
+    def test_le_chemin_imap_ne_demande_rien_a_mail_app(
+        self, connector: AppleMailConnector
+    ) -> None:
+        with (
+            patch.object(connector, "resolve_inbox_name") as depuis_mail,
+            patch.object(connector, "_imap_search", return_value=[]) as imap,
+        ):
+            connector.search_messages("Exchange", limit=1)
+
+        depuis_mail.assert_not_called()
+        # mailbox=None descend jusqu'au chemin IMAP, qui interrogera le
+        # serveur (RFC 6154) plutot que Mail.app.
+        assert imap.call_args.args[1] is None
+
+    def test_le_chemin_applescript_resout_toujours_la_sienne(
+        self, connector: AppleMailConnector
+    ) -> None:
+        with (
+            patch.object(
+                connector, "resolve_inbox_name", return_value="Boîte de réception"
+            ) as depuis_mail,
+            patch.object(
+                connector, "_imap_search", side_effect=OSError("pas d'IMAP ici")
+            ),
+            patch.object(
+                connector, "_search_messages_applescript", return_value=[]
+            ) as applescript,
+        ):
+            connector.search_messages("Exchange", limit=1)
+
+        depuis_mail.assert_called_once()
+        assert applescript.call_args.args[1] == "Boîte de réception"
+
+    def test_une_boite_explicite_est_respectee_par_les_deux_chemins(
+        self, connector: AppleMailConnector
+    ) -> None:
+        with (
+            patch.object(connector, "resolve_inbox_name") as depuis_mail,
+            patch.object(connector, "_imap_search", return_value=[]) as imap,
+        ):
+            connector.search_messages("Exchange", mailbox="Archive", limit=1)
+
+        depuis_mail.assert_not_called()
+        assert imap.call_args.args[1] == "Archive"
