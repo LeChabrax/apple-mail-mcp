@@ -21,7 +21,7 @@ Every tool ships with the per-tool annotations the MCP 2025-03 spec defines so h
 
 - **Read-only (9):** `list_accounts`, `list_mailboxes`, `list_rules`, `list_templates`, `search_messages`, `get_messages`, `get_thread`, `get_template`, `render_template`. All have `readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`.
 - **Mutating destructive (9):** `update_message`, `update_mailbox`, `update_rule`, `update_draft`, `delete_draft`, `delete_mailbox`, `delete_messages`, `delete_rule`, `delete_template`. All have `destructiveHint=true`, `idempotentHint=true`.
-- **Mutating additive (5):** `create_mailbox`, `create_draft`, `create_rule`, `save_template`, `save_attachments`. All have `destructiveHint=false`. Idempotent except `create_draft` and `create_rule` (each call may create a new entity).
+- **Mutating additive (6):** `create_mailbox`, `create_draft`, `create_rule`, `save_template`, `save_attachments`, `setup_imap`. All have `destructiveHint=false`. Idempotent except `create_draft` and `create_rule` (each call may create a new entity).
 
 **Host doesn't honor annotations?** Use the split-server config in the [README](../../README.md#optional-split-read--write-servers). Pass `--read-only` to one connector entry to expose only the 9 read tools; pair with a second non-read-only entry. Claude Desktop's per-server permission UI then naturally groups them. The two approaches compose: annotations describe the model, the split-server flag enforces it client-side.
 
@@ -1259,6 +1259,46 @@ accounts = list_accounts()
 first_enabled = next(a for a in accounts["accounts"] if a["enabled"])
 list_mailboxes(first_enabled["name"])
 ```
+
+### setup_imap
+
+Enable the IMAP fast path for a Mail.app account, from the conversation
+instead of the `apple-mail-mcp setup-imap` CLI. Without a Keychain entry,
+body and text searches fall back to AppleScript — measured 148s for 100
+cold-cache messages on a 47k-message INBOX, against roughly a second over
+IMAP.
+
+The password cannot be derived: Mail.app's own credentials live in the
+protected keychain, ACL-bound to Mail.app, so the user supplies an
+app-specific password once per account.
+
+**Parameters:**
+
+- `account` (str, required): Mail.app account name, as reported by `list_accounts`.
+- `password` (str): App-specific password. Required unless `uninstall=True`. Never logged nor echoed back.
+- `email` (str, optional): Override the address used as the Keychain key and IMAP login. Defaults to Mail.app's configured address.
+- `uninstall` (bool, default `False`): Remove the entry. The account keeps working through the AppleScript fallback.
+
+**Returns:**
+
+```json
+{
+  "success": true,
+  "account": "Gmail",
+  "verified": true,
+  "output": "Found Mail.app account 'Gmail' (email: me@gmail.com).\nStored in Keychain as 'apple-mail-mcp.imap.Gmail'.\nOK (connected to imap.gmail.com:993)"
+}
+```
+
+**Field notes:**
+
+- `verified`: `false` when the entry was written but the login probe could
+  not complete (network or protocol error). The CLI keeps the entry in that
+  case; treat it as unconfirmed and re-run, because an unverified entry
+  sends every later search back to the AppleScript path.
+- A rejected password rolls the Keychain entry back, so a retry starts clean.
+
+---
 
 ---
 

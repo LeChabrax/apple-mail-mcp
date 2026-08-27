@@ -57,6 +57,8 @@ ADDITIVE_TOOLS: set[str] = {
     "create_rule",
     "save_template",
     "save_attachments",
+    # Writes a Keychain entry, never touches mail data.
+    "setup_imap",
     # Fork additions: send in one call, no draft round-trip.
     "send_email",
     "reply",
@@ -180,10 +182,10 @@ class TestProductionAnnotations:
         assert names == READ_ONLY_TOOLS | MUTATING_TOOLS
 
     def test_classifications_partition_correctly(self) -> None:
-        """No overlap between read-only and mutating sets; counts are 10 + 14."""
+        """No overlap between read-only and mutating sets; counts are 10 + 20."""
         assert READ_ONLY_TOOLS.isdisjoint(MUTATING_TOOLS)
         assert len(READ_ONLY_TOOLS) == 10
-        assert len(MUTATING_TOOLS) == 19
+        assert len(MUTATING_TOOLS) == 20
         assert DESTRUCTIVE_TOOLS.isdisjoint(ADDITIVE_TOOLS)
 
     @pytest.mark.parametrize("name", sorted(READ_ONLY_TOOLS))

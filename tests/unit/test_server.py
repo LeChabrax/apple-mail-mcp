@@ -11,6 +11,7 @@ operation_logger calls.
 from __future__ import annotations
 
 import json
+import sys
 from typing import Any
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -45,6 +46,7 @@ from apple_mail_mcp.server import (
     save_attachments,
     save_template,
     search_messages,
+    setup_imap,
     update_message,
     update_rule,
 )
@@ -4511,3 +4513,89 @@ class TestConfirmationEnvoi:
         from apple_mail_mcp.server import _phrase_for
         assert _phrase_for("create_draft") == "OUI ENVOIE"
         assert _phrase_for("update_draft") == "OUI ENVOIE"
+
+
+class TestSetupImap:
+    """The in-conversation equivalent of the `setup-imap` CLI."""
+
+    def _patched(
+        self, monkeypatch: Any, exit_code: int, stdout: str = "", stderr: str = ""
+    ) -> dict[str, Any]:
+        """Stub run_setup_imap, capturing the kwargs the tool passes it."""
+        seen: dict[str, Any] = {}
+
+        def fake(**kwargs: Any) -> int:
+            seen.update(kwargs)
+            # The tool resolves the password through the getpass seam, the
+            # same way the CLI's interactive prompt does.
+            seen["resolved_password"] = kwargs["getpass_fn"]("prompt: ")
+            print(stdout, end="")
+            print(stderr, end="", file=sys.stderr)
+            return exit_code
+
+        monkeypatch.setattr("apple_mail_mcp.cli.run_setup_imap", fake)
+        return seen
+
+    async def test_success_reports_verified(self, monkeypatch: Any) -> None:
+        seen = self._patched(monkeypatch, 0, stdout="OK (connected to x:993)\n")
+        result = setup_imap(account="Gmail", password="app-specific-pw")
+        assert result == {
+            "success": True,
+            "account": "Gmail",
+            "verified": True,
+            "output": "OK (connected to x:993)",
+        }
+        assert seen["account_name"] == "Gmail"
+        assert seen["resolved_password"] == "app-specific-pw"
+        assert seen["uninstall"] is False
+
+    async def test_written_but_unverified_is_not_verified(
+        self, monkeypatch: Any
+    ) -> None:
+        # Exit 0 with a warning means the entry was written but never proved
+        # against the server — reporting that as verified would hide a
+        # silent fallback to the slow AppleScript path.
+        self._patched(
+            monkeypatch, 0, stderr="WARNING: IMAP verification could not complete\n"
+        )
+        result = setup_imap(account="Gmail", password="pw")
+        assert result["success"] is True
+        assert result["verified"] is False
+
+    async def test_failure_surfaces_cli_output(self, monkeypatch: Any) -> None:
+        self._patched(monkeypatch, 1, stderr="ERROR: IMAP login was rejected\n")
+        result = setup_imap(account="Gmail", password="wrong")
+        assert result["success"] is False
+        assert result["error_type"] == "imap_setup_failed"
+        assert "rejected" in result["error"]
+
+    async def test_password_required_unless_uninstall(
+        self, monkeypatch: Any
+    ) -> None:
+        called = False
+
+        def fake(**kwargs: Any) -> int:
+            nonlocal called
+            called = True
+            return 0
+
+        monkeypatch.setattr("apple_mail_mcp.cli.run_setup_imap", fake)
+        result = setup_imap(account="Gmail")
+        assert result["error_type"] == "validation"
+        assert called is False
+
+    async def test_uninstall_needs_no_password(self, monkeypatch: Any) -> None:
+        seen = self._patched(monkeypatch, 0, stdout="Removed Keychain entry.\n")
+        result = setup_imap(account="Gmail", uninstall=True)
+        assert result["success"] is True
+        assert seen["uninstall"] is True
+
+    async def test_email_override_is_forwarded(self, monkeypatch: Any) -> None:
+        seen = self._patched(monkeypatch, 0, stdout="OK\n")
+        setup_imap(account="iCloud", password="pw", email="me@icloud.com")
+        assert seen["cli_email"] == "me@icloud.com"
+
+    async def test_password_never_echoed_back(self, monkeypatch: Any) -> None:
+        self._patched(monkeypatch, 0, stdout="OK\n")
+        result = setup_imap(account="Gmail", password="s3cret-token")
+        assert "s3cret-token" not in str(result)

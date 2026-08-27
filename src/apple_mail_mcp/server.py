@@ -4,11 +4,13 @@ FastMCP server for Apple Mail integration.
 
 import argparse
 import atexit
+import io
 import logging
 import os
 import sys
 import tempfile
 from collections.abc import Callable
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Annotated, Any, TypeVar, cast
 
@@ -67,7 +69,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Read-only mode (#217). The connector can be launched with `--read-only`
-# to skip registration of the 19 mutating tools so Claude Desktop users can
+# to skip registration of the 20 mutating tools so Claude Desktop users can
 # run two server entries side-by-side and batch-approve the read-only one.
 # `_pre_parse_read_only` parses argv at module load (tolerant of unknown
 # args, which `main()` parses again with the full schema) so the
@@ -368,6 +370,115 @@ def list_accounts() -> dict[str, Any]:
 
     except Exception as e:
         logger.error(f"Error listing accounts: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "error_type": "unknown",
+        }
+
+
+@_tool(
+    {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True},
+    mutating=True,
+)
+def setup_imap(
+    account: str,
+    password: str | None = None,
+    email: str | None = None,
+    uninstall: bool = False,
+) -> dict[str, Any]:
+    """
+    Enable (or remove) the IMAP fast path for a Mail.app account.
+
+    Without an IMAP Keychain entry, body/text searches fall back to
+    AppleScript, which is orders of magnitude slower (measured 148s for
+    100 cold-cache messages on a 47k-message INBOX vs ~1s over IMAP).
+    This tool is the in-conversation equivalent of the
+    `apple-mail-mcp setup-imap` CLI: it stores the app-specific password
+    in the Keychain and verifies it against the server, rolling the entry
+    back if the login is rejected.
+
+    The password cannot be read from Mail.app: its credentials live in the
+    protected keychain, ACL-bound to Mail.app, so the user must supply an
+    app-specific password once per account.
+
+    Args:
+        account: Mail.app account name (e.g. 'Gmail'), as reported by
+            list_accounts.
+        password: App-specific password. Required unless uninstall=True.
+            Never logged, never echoed back in the response.
+        email: Override the email used as the Keychain key and IMAP login.
+            Defaults to Mail.app's configured address for the account.
+        uninstall: Remove the entry instead of writing one. The account
+            keeps working through the AppleScript fallback.
+
+    Returns:
+        Dictionary with success flag and the setup log lines.
+
+    Example:
+        >>> setup_imap(account="Gmail", password="abcd-efgh-ijkl-mnop")
+        {"success": True, "account": "Gmail", "output": "Found Mail.app ..."}
+    """
+    try:
+        rate_err = check_rate_limit("setup_imap", {"account": account})
+        if rate_err:
+            return rate_err
+
+        if not uninstall and not password:
+            return {
+                "success": False,
+                "error": (
+                    "password is required unless uninstall=True. Ask the "
+                    "user for the account's app-specific password."
+                ),
+                "error_type": "validation",
+            }
+
+        from .cli import run_setup_imap
+
+        # run_setup_imap is the CLI implementation and reports through
+        # stdout/stderr. Capture both rather than reimplement the flow —
+        # keychain write, live login probe and rollback-on-bad-password all
+        # live in there and must not drift between the two entry points.
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = run_setup_imap(
+                account_name=account,
+                cli_email=email,
+                uninstall=uninstall,
+                getpass_fn=lambda _prompt: cast(str, password),
+            )
+
+        # Log the outcome, never the secret.
+        operation_logger.log_operation(
+            "setup_imap",
+            {"account": account, "uninstall": uninstall},
+            "success" if code == 0 else "error",
+        )
+
+        output = (out.getvalue() + err.getvalue()).strip()
+        if code != 0:
+            return {
+                "success": False,
+                "account": account,
+                "error": output or f"setup-imap exited with code {code}",
+                "error_type": "imap_setup_failed",
+            }
+        # Exit 0 covers two outcomes: password verified against the server,
+        # or written-but-unverified after a network/protocol error (the CLI
+        # keeps the entry and warns). Never report the second as verified —
+        # an unverified entry silently sends every later search back to the
+        # AppleScript path.
+        verified = "WARNING:" not in output
+        return {
+            "success": True,
+            "account": account,
+            "verified": verified,
+            "output": output,
+        }
+
+    except Exception as e:
+        logger.error(f"Error configuring IMAP for {account!r}: {e}")
         return {
             "success": False,
             "error": str(e),
@@ -3651,7 +3762,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Start the server with only the 10 read-only tools registered "
-            "(skips the 19 mutating tools). Pair with a second non-read-only "
+            "(skips the 20 mutating tools). Pair with a second non-read-only "
             "server entry in your MCP client to batch-approve reads while "
             "still gating writes per call. See docs/reference/TOOLS.md."
         ),
@@ -3710,7 +3821,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if _READ_ONLY:
         logger.info(
-            "Read-only mode: 19 mutating tools skipped (--read-only). "
+            "Read-only mode: 20 mutating tools skipped (--read-only). "
             "Only the 9 read tools are registered."
         )
     logger.info("Starting Apple Mail MCP server")

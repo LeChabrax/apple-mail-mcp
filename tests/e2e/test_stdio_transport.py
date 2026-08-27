@@ -53,6 +53,13 @@ EXPECTED_TOOLS = {
     "get_template",
     "save_template",
     "delete_template",
+    # Fork additions: send in one call, plus account removal.
+    "delete_account",
+    "send_email",
+    "reply",
+    "reply_all",
+    "forward",
+    "setup_imap",
     "render_template",
 }
 

@@ -46,6 +46,14 @@ EXPECTED_TOOLS = {
     "create_rule",
     "update_rule",
     "delete_rule",
+    # IMAP fast path setup
+    "setup_imap",
+    # Fork additions: send in one call, plus account removal.
+    "delete_account",
+    "send_email",
+    "reply",
+    "reply_all",
+    "forward",
     # Templates (#30)
     "list_templates",
     "get_template",
