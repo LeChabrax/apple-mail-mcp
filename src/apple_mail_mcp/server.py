@@ -3708,6 +3708,7 @@ async def reply(
         cc=cc,
         seed_mailbox=seed_mailbox,
         send_now=send_now,
+        confirmation=confirmation,
         ctx=ctx,
     )
 
@@ -3747,6 +3748,7 @@ async def reply_all(
         reply_all=True,
         seed_mailbox=seed_mailbox,
         send_now=send_now,
+        confirmation=confirmation,
         ctx=ctx,
     )
 
@@ -3788,6 +3790,7 @@ async def forward(
         from_account=from_account,
         seed_mailbox=seed_mailbox,
         send_now=send_now,
+        confirmation=confirmation,
         ctx=ctx,
     )
 

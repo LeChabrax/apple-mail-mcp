@@ -4509,6 +4509,31 @@ class TestConfirmationEnvoi:
         import inspect
         assert "confirmation" in inspect.signature(_run_send_now_gates).parameters
 
+    @pytest.mark.parametrize(
+        "nom,kwargs",
+        [
+            ("reply", {"reply_to": "1"}),
+            ("reply_all", {"reply_to": "1"}),
+            ("forward", {"forward_of": "1", "to": ["a@example.com"]}),
+        ],
+    )
+    async def test_les_wrappers_transmettent_la_phrase(
+        self, nom: str, kwargs: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Verifier la signature ne suffit pas : reply, reply_all et forward
+        # acceptaient `confirmation` puis l'oubliaient en appelant create_draft.
+        # La phrase tapee par la personne etait perdue en route, l'envoi refuse,
+        # et l'assistant en concluait que « le tool refuse la confirmation par
+        # ce canal » — constate en production le 2026-08-27.
+        from apple_mail_mcp import server as srv
+
+        appel = AsyncMock(return_value={"success": True})
+        monkeypatch.setattr(srv, "create_draft", appel)
+        outil = getattr(srv, nom)
+        await getattr(outil, "fn", outil)(confirmation="OUI ENVOIE", **kwargs)
+
+        assert appel.await_args.kwargs["confirmation"] == "OUI ENVOIE"
+
     async def test_phrase_d_envoi_pour_create_draft(self) -> None:
         from apple_mail_mcp.server import _phrase_for
         assert _phrase_for("create_draft") == "OUI ENVOIE"
