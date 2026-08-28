@@ -33,6 +33,7 @@ from typing import Any
 
 import pytest
 
+from apple_mail_mcp.exceptions import MailMessageNotFoundError
 from apple_mail_mcp.imap_status import OK, imap_status
 from apple_mail_mcp.mail_connector import AppleMailConnector
 
@@ -216,18 +217,25 @@ class TestParcoursEquipe:
         if not trouves:
             pytest.skip("boite vide sur ce poste, rien a enchainer")
 
-        premier = trouves[0]
-        assert premier.get("subject") is not None
-        assert premier.get("id") or premier.get("message_id")
+        assert all(m.get("subject") is not None for m in trouves)
 
-        fil = connector.get_thread(
-            premier.get("message_id") or str(premier["id"])
-        )
+        # Un message tout juste arrive peut n'etre resoluble par aucune boite
+        # au moment ou on le demande. Essayer les candidats dans l'ordre evite
+        # un rouge qui ne parle de rien ; n'en resoudre AUCUN reste un rouge.
+        fil: list[Any] = []
+        derniere: Exception | None = None
+        for candidat in trouves:
+            try:
+                fil = connector.get_thread(
+                    candidat.get("message_id") or str(candidat["id"])
+                )
+                break
+            except MailMessageNotFoundError as exc:
+                derniere = exc
         duree = time.perf_counter() - debut
+        assert fil, f"aucun des {len(trouves)} messages n'a de fil ({derniere})"
 
-        # Un fil contient au moins le message d'origine. Une liste vide
-        # signifierait qu'on a resolu le mauvais identifiant.
-        assert isinstance(fil, list) and fil
+        assert isinstance(fil, list)
         # Le vrai defaut que ce parcours a revele : le chemin IMAP rend dans
         # `id` le Message-ID RFC, que la resolution d'ancre ne cherchait pas.
         # « cherche puis ouvre le fil » levait MailMessageNotFoundError des que
