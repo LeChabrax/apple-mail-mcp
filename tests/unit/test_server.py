@@ -4594,8 +4594,23 @@ class TestSetupImap:
         assert result["error_type"] == "imap_setup_failed"
         assert "rejected" in result["error"]
 
-    async def test_password_required_unless_uninstall(
-        self, monkeypatch: Any
+    async def test_sans_mot_de_passe_une_fenetre_le_demande(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Le mot de passe ne doit pas avoir a etre ecrit dans la conversation,
+        # ou il reste enregistre. Sans parametre, une fenetre macOS le demande
+        # et il va du clavier au trousseau sans passer par ici.
+        seen = self._patched(monkeypatch, 0, stdout="OK\n")
+        monkeypatch.setattr(
+            "apple_mail_mcp.password_prompt.demander_mot_de_passe",
+            lambda *a, **k: "saisi-dans-la-fenetre",
+        )
+        result = setup_imap(account="Gmail")
+        assert result["success"] is True
+        assert seen["resolved_password"] == "saisi-dans-la-fenetre"
+
+    async def test_fenetre_annulee_ne_configure_rien(
+        self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         called = False
 
@@ -4605,9 +4620,30 @@ class TestSetupImap:
             return 0
 
         monkeypatch.setattr("apple_mail_mcp.cli.run_setup_imap", fake)
+        monkeypatch.setattr(
+            "apple_mail_mcp.password_prompt.demander_mot_de_passe",
+            lambda *a, **k: None,
+        )
         result = setup_imap(account="Gmail")
-        assert result["error_type"] == "validation"
+        assert result["error_type"] == "cancelled"
         assert called is False
+
+    async def test_sans_fenetre_possible_on_le_dit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Session sans interface, pilotage refuse : l'appelant doit pouvoir
+        # proposer le Terminal plutot que de croire a une annulation.
+        from apple_mail_mcp.password_prompt import DialogueIndisponible
+
+        def boum(*a: Any, **k: Any) -> str:
+            raise DialogueIndisponible("pas d'interface")
+
+        monkeypatch.setattr(
+            "apple_mail_mcp.password_prompt.demander_mot_de_passe", boum
+        )
+        result = setup_imap(account="Gmail")
+        assert result["error_type"] == "prompt_unavailable"
+        assert "Terminal" in result["error"]
 
     async def test_uninstall_needs_no_password(self, monkeypatch: Any) -> None:
         seen = self._patched(monkeypatch, 0, stdout="Removed Keychain entry.\n")

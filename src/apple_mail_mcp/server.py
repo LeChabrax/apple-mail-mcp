@@ -442,14 +442,19 @@ def setup_imap(
     back if the login is rejected.
 
     The password cannot be read from Mail.app: its credentials live in the
-    protected keychain, ACL-bound to Mail.app, so the user must supply an
-    app-specific password once per account.
+    protected keychain, ACL-bound to Mail.app, so it has to be typed once per
+    account. Call this WITHOUT `password` and a macOS window asks for it
+    directly — nothing transits through the conversation. Everything else
+    (server, port, login) is negotiated, so never ask for those.
 
     Args:
         account: Mail.app account name (e.g. 'Gmail'), as reported by
             list_accounts.
-        password: App-specific password. Required unless uninstall=True.
-            Never logged, never echoed back in the response.
+        password: The mailbox password. OMIT IT and a macOS window opens on
+            the person's Mac for them to type it, hidden — prefer that, so the
+            password never lands in the conversation transcript. Pass it here
+            only when they already typed it to you. Never logged, never echoed
+            back in the response.
         email: Override the email used as the Keychain key and IMAP login.
             Defaults to Mail.app's configured address for the account.
         uninstall: Remove the entry instead of writing one. The account
@@ -468,14 +473,38 @@ def setup_imap(
             return rate_err
 
         if not uninstall and not password:
-            return {
-                "success": False,
-                "error": (
-                    "password is required unless uninstall=True. Ask the "
-                    "user for the account's app-specific password."
-                ),
-                "error_type": "validation",
-            }
+            # Personne n'a fourni de mot de passe : l'ouvrir dans une fenetre
+            # macOS plutot que de le reclamer dans la conversation, ou il
+            # resterait enregistre. Il va du clavier au trousseau sans passer
+            # par ici.
+            from .password_prompt import DialogueIndisponible, demander_mot_de_passe
+
+            try:
+                _, _, adresse = mail._resolve_imap_config(account)
+            except Exception:  # noqa: BLE001 — l'adresse n'est qu'un libelle
+                adresse = account
+            try:
+                password = demander_mot_de_passe(account, adresse or account)
+            except DialogueIndisponible as e:
+                return {
+                    "success": False,
+                    "error": (
+                        f"Aucune fenetre de saisie n'a pu s'ouvrir ({e}). "
+                        f"Passer le mot de passe en parametre, ou lancer "
+                        f"`apple-mail-mcp setup-imap --account {account!r}` "
+                        f"dans le Terminal."
+                    ),
+                    "error_type": "prompt_unavailable",
+                }
+            if not password:
+                return {
+                    "success": False,
+                    "error": (
+                        "Saisie annulee : aucune fenetre n'a rendu de mot de "
+                        "passe. Le compte reste en lecture lente."
+                    ),
+                    "error_type": "cancelled",
+                }
 
         from .cli import run_setup_imap
 
