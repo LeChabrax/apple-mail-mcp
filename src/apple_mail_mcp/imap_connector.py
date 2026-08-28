@@ -173,7 +173,7 @@ def _needs_utf8_charset(criteria: list[Any]) -> bool:
     )
 
 
-def _connect_imap(host, port, timeout):
+def _connect_imap(host: str, port: int, timeout: float) -> IMAPClient:
     """Ouvre une connexion IMAP en negociant le bon mode TLS pour ce port."""
     if int(port) == _STARTTLS_PORT:
         client = IMAPClient(host, port=port, ssl=False, timeout=timeout)

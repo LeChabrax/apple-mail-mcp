@@ -48,7 +48,7 @@ from .exceptions import (
     MailUnsupportedRuleActionError,
 )
 from .imap_connector import ImapConnectionPool, ImapConnector
-from .imap_overrides import get_login_override
+from .imap_overrides import get_login_override, get_port_override
 from .keychain import get_imap_password
 from .utils import (
     applescript_account_clause,
@@ -1833,6 +1833,10 @@ class AppleMailConnector:
         override = get_login_override(account)
         if override:
             email = override
+        # Meme logique pour le port : celui que `setup-imap` a vu fonctionner
+        # l'emporte sur celui que Mail declare, qui peut etre absent (compte
+        # Exchange natif) ou faux.
+        port_retenu = get_port_override(account)
         # Mail.app reports `port` as 0 for an account it does not drive over
         # IMAP itself — a native Exchange account, for instance, which talks
         # EWS and has no IMAP port to give even when its server DOES answer
@@ -1842,7 +1846,7 @@ class AppleMailConnector:
         # every call silently falls back to AppleScript. When the host is
         # known but the port is not, assume IMAPS rather than give up: a
         # wrong guess fails the same way an absent port already did.
-        port = cast(int, parsed.get("port") or 0)
+        port = port_retenu or cast(int, parsed.get("port") or 0)
         if port <= 0 and host:
             port = _DEFAULT_IMAPS_PORT
         return (host, port, email)

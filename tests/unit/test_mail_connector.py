@@ -916,6 +916,23 @@ class TestAppleMailConnector:
         assert result == ("imap.gmail.com", 993, "me@gmail.com")
 
     @patch.object(AppleMailConnector, "_run_applescript")
+    def test_resolve_imap_config_prefers_the_negotiated_port(
+        self, mock_run: MagicMock, connector: AppleMailConnector,
+        monkeypatch: Any,
+    ) -> None:
+        """Le port que `setup-imap` a vu fonctionner l'emporte sur celui que
+        Mail declare. Sans cette lecture, la negociation servirait une fois
+        puis serait oubliee, et chaque appel repartirait de la valeur fausse."""
+        from apple_mail_mcp import mail_connector as mc
+
+        monkeypatch.setattr(mc, "get_port_override", lambda a: 993)
+        mock_run.return_value = (
+            '{"host":"imap.ex.com","port":143,"user_name":"u@ex.com",'
+            '"email_addresses":["u@ex.com"]}'
+        )
+        assert connector._resolve_imap_config("X") == ("imap.ex.com", 993, "u@ex.com")
+
+    @patch.object(AppleMailConnector, "_run_applescript")
     def test_resolve_imap_config_missing_port_assumes_imaps(
         self, mock_run: MagicMock, connector: AppleMailConnector
     ) -> None:

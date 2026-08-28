@@ -97,3 +97,70 @@ def delete_login_override(account: str) -> None:
         # Last entry removed — drop the file so an empty store leaves no
         # stray artifact.
         path.unlink(missing_ok=True)
+
+
+# --- Port ------------------------------------------------------------------
+#
+# Meme raison que pour le login, autre propriete : le port que Mail.app declare
+# n'est pas toujours celui du serveur IMAP. Un compte Exchange natif n'en
+# declare aucun (`port` = 0) alors que son serveur repond en IMAPS, et un
+# compte peut annoncer 143 quand seul 993 aboutit. `setup-imap` negocie le bon
+# port a la configuration ; sans le retenir, chaque appel suivant repartirait
+# de la valeur fausse.
+#
+# Le port vit dans un fichier separe : les deux stores ont des valeurs de types
+# differents, et melanger `str` et `int` dans le meme JSON obligerait a
+# assouplir le filtre de `_load`, qui protege justement le chemin de resolution
+# d'une donnee malformee.
+
+def _ports_path() -> Path:
+    home_override = os.environ.get("APPLE_MAIL_MCP_HOME")
+    base = Path(home_override) if home_override else Path.home() / ".apple_mail_mcp"
+    return base / "imap_port_overrides.json"
+
+
+def _load_ports() -> dict[str, int]:
+    """Charge la carte des ports. Un fichier absent, illisible ou corrompu rend
+    une carte vide : un override ne doit jamais lever dans la resolution."""
+    try:
+        data = json.loads(_ports_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        str(k): int(v)
+        for k, v in data.items()
+        if isinstance(k, str) and isinstance(v, int) and 0 < v < 65536
+    }
+
+
+def get_port_override(account: str) -> int | None:
+    """Port IMAP retenu pour ce compte, ou ``None``."""
+    return _load_ports().get(account)
+
+
+def set_port_override(account: str, port: int) -> None:
+    """Retient ``account -> port``, celui qui a reellement ouvert une session."""
+    ports = _load_ports()
+    ports[account] = int(port)
+    path = _ports_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(ports, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+
+
+def delete_port_override(account: str) -> None:
+    """Oublie le port retenu. Sans effet si absent."""
+    ports = _load_ports()
+    if account not in ports:
+        return
+    del ports[account]
+    path = _ports_path()
+    if ports:
+        path.write_text(
+            json.dumps(ports, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    else:
+        path.unlink(missing_ok=True)

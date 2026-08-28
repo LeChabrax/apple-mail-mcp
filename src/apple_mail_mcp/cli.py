@@ -18,8 +18,13 @@ from .exceptions import (
     MailKeychainEntryNotFoundError,
     MailKeychainError,
 )
+from .imap_autoconf import negocier
 from .imap_connector import ImapConnector
-from .imap_overrides import delete_login_override, set_login_override
+from .imap_overrides import (
+    delete_login_override,
+    set_login_override,
+    set_port_override,
+)
 from .keychain import (
     delete_imap_password,
     get_imap_password,
@@ -65,6 +70,83 @@ def _maybe_print_icloud_login_hint(
         )
 
 
+def run_setup_imap_all(
+    *,
+    connector_factory: Callable[[], AppleMailConnector] | None = None,
+    getpass_fn: Callable[[str], str] | None = None,
+    setup_fn: Callable[..., int] | None = None,
+) -> int:
+    """Configure TOUS les comptes en une passe, en sautant ceux qui marchent.
+
+    L'installation s'arretait au serveur declare dans Claude Desktop, et
+    l'activation restait a faire compte par compte, dans un terminal. Personne
+    ne le faisait : la lenteur qui s'ensuit ressemble a une panne de l'outil,
+    pas a une configuration absente. Une seule passe, deux ou trois mots de
+    passe a la suite, c'est le parcours qui manquait.
+
+    Un compte deja en chemin rapide n'est pas retouche. Une ligne vide le
+    saute : il reste lisible, par le chemin lent.
+    """
+    from .imap_status import OK, imap_status
+
+    mail = (connector_factory or AppleMailConnector)()
+    demander = getpass_fn or getpass.getpass
+    lancer = setup_fn or run_setup_imap
+
+    print("Etat actuel des comptes...")
+    rapport = imap_status(mail)
+    a_faire = [r for r in rapport["accounts"] if r["verdict"] != OK and r["host"]]
+    deja = rapport["fast_path_count"]
+    sans_serveur = [r for r in rapport["accounts"] if not r["host"]]
+
+    print(f"{deja} compte(s) deja en chemin rapide.")
+    for r in sans_serveur:
+        print(f"  - {r['account']} : pas de serveur IMAP, rien a configurer")
+    if not a_faire:
+        print("Rien a faire.")
+        return 0
+
+    print(
+        f"\n{len(a_faire)} compte(s) a configurer. Le mot de passe demande est "
+        f"celui DE LA BOITE, pas celui de la session macOS. Sur Gmail et "
+        f"iCloud il faut un mot de passe applicatif ; ailleurs, le mot de "
+        f"passe habituel suffit. Entree vide = passer ce compte.\n"
+    )
+
+    echecs = 0
+    for r in a_faire:
+        nom = str(r["account"])
+        print(f"── {nom}  ({r['email'] or 'sans adresse'})")
+        try:
+            mdp = demander("   mot de passe (vide = passer) : ")
+        except (EOFError, KeyboardInterrupt):
+            print("\nInterrompu.", file=sys.stderr)
+            return 1
+        if not mdp:
+            print("   passe, ce compte restera en mode lent.\n")
+            continue
+        def rendre(_prompt: str, _mdp: str = mdp) -> str:
+            """Le mot de passe est deja saisi : run_setup_imap le reclamerait
+            une seconde fois par sa couture d'invite."""
+            return _mdp
+
+        if lancer(
+            account_name=nom,
+            cli_email=None,
+            uninstall=False,
+            getpass_fn=rendre,
+        ) != 0:
+            echecs += 1
+        print()
+
+    final = imap_status(mail)
+    print(
+        f"{final['fast_path_count']} compte(s) sur {final['count']} en chemin "
+        f"rapide."
+    )
+    return 1 if echecs else 0
+
+
 def run_setup_imap(
     *,
     account_name: str,
@@ -98,6 +180,12 @@ def run_setup_imap(
     # at every runtime IMAP request to pick the keychain key — so we use
     # the same email here as the keychain key, otherwise setup writes one
     # entry and runtime looks for another. (#201)
+    emails_declarees: list[str] = []
+    for acc in accounts:
+        if account_name in (acc.get("name"), acc.get("id")):
+            emails_declarees = list(acc.get("email_addresses") or [])
+            break
+
     try:
         host, port, resolved_email = mail._resolve_imap_config(account_name)
     except MailAccountNotFoundError:
@@ -168,6 +256,33 @@ def run_setup_imap(
     if cli_email:
         set_login_override(account_name, email)
 
+    # Avant de sonder, chercher les parametres qui marchent VRAIMENT. Mail.app
+    # declare un port parfois absent (compte Exchange natif) ou faux, et le
+    # LOGIN attendu n'est pas toujours l'adresse affichee. Les essayer prend
+    # quelques secondes ; les deviner a coute une soiree le 2026-08-27.
+    print(f"Recherche des parametres pour {host}...")
+    reglage, journal = negocier(
+        host, port, email, list(emails_declarees), password
+    )
+    for ligne in journal:
+        print(f"  {ligne}")
+    if reglage is not None:
+        if reglage.port != port:
+            set_port_override(account_name, reglage.port)
+            print(f"  port retenu : {reglage.port} ({reglage.origine_port})")
+        if reglage.login != email:
+            # Le mot de passe a ete ecrit sous l'ancienne cle : la deplacer,
+            # sinon la resolution a l'execution chercherait une entree absente.
+            try:
+                delete_imap_password(account_name, email)
+            except MailKeychainError:
+                pass
+            email = reglage.login
+            set_imap_password(account_name, email, password)
+            set_login_override(account_name, email)
+            print(f"  identifiant retenu : {email} ({reglage.origine_login})")
+        host, port = reglage.host, reglage.port
+
     print(f"Testing IMAP connection to {host}:{port}...")
     imap = (imap_factory or ImapConnector)(host, port, email, password)
     try:
@@ -231,4 +346,4 @@ def run_setup_imap(
     return 0
 
 
-__all__ = ["run_setup_imap", "get_imap_password"]
+__all__ = ["run_setup_imap", "run_setup_imap_all", "get_imap_password"]

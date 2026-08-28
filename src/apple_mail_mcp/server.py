@@ -3823,8 +3823,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     setup_imap.add_argument(
+        "--all",
+        action="store_true",
+        dest="tous",
+        help=(
+            "Configure every account that isn't already on the fast path, in "
+            "one pass, asking for each password in turn. An empty line skips "
+            "an account."
+        ),
+    )
+    setup_imap.add_argument(
         "--account",
-        required=True,
         help="Mail.app account name (e.g. 'iCloud', 'Gmail').",
     )
     setup_imap.add_argument(
@@ -3870,7 +3879,12 @@ def main(argv: list[str] | None = None) -> int:
         return status_main()
 
     if args.command == "setup-imap":
-        from .cli import run_setup_imap
+        from .cli import run_setup_imap, run_setup_imap_all
+
+        if getattr(args, "tous", False):
+            return run_setup_imap_all()
+        if not args.account:
+            parser.error("setup-imap requires --account NAME (or --all)")
 
         return run_setup_imap(
             account_name=args.account,
