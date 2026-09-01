@@ -235,6 +235,83 @@ class TestSafetyGates:
         assert not list(plist_file.parent.glob("*.tmp-*"))
 
 
+class TestICloudMirror:
+    """Regression cover for the failure only a real Mail relaunch revealed.
+
+    Writing the local file alone returns success, reads back correctly, and is
+    silently discarded when Mail next starts. Every one of these tests would
+    have passed before the fix if they only checked the local path — so they
+    assert on the iCloud path specifically.
+    """
+
+    def test_both_files_written_by_default(self, tmp_path, mail_quit):
+        icloud = tmp_path / "icloud" / "SyncedSmartMailboxes.plist"
+        local = tmp_path / "local" / "SyncedSmartMailboxes.plist"
+        with patch.object(sm, "icloud_plist_path", return_value=icloud), patch.object(
+            sm, "plist_path", return_value=local
+        ):
+            out = sm.write_smart_mailboxes(
+                [sm.build_smart_mailbox("A", [{"field": "from", "value": "a.com"}])]
+            )
+
+        assert icloud.exists() and local.exists()
+        assert out["paths"] == [str(icloud), str(local)]
+
+    def test_icloud_written_first(self, tmp_path, mail_quit):
+        """The authoritative copy must be correct even if the second write dies."""
+        icloud = tmp_path / "icloud" / "SyncedSmartMailboxes.plist"
+        local = tmp_path / "local" / "SyncedSmartMailboxes.plist"
+        with patch.object(sm, "icloud_plist_path", return_value=icloud), patch.object(
+            sm, "plist_path", return_value=local
+        ):
+            assert sm.write_smart_mailboxes([])["path"] == str(icloud)
+
+    def test_local_only_when_mail_not_in_icloud(self, tmp_path, mail_quit):
+        local = tmp_path / "local" / "SyncedSmartMailboxes.plist"
+        with patch.object(sm, "icloud_plist_path", return_value=None), patch.object(
+            sm, "plist_path", return_value=local
+        ):
+            out = sm.write_smart_mailboxes([])
+        assert out["paths"] == [str(local)]
+
+    def test_explicit_path_writes_only_that_file(self, tmp_path, mail_quit):
+        """A named target is an instruction, not a hint: no surprise second write."""
+        explicit = tmp_path / "explicit.plist"
+        icloud = tmp_path / "icloud" / "SyncedSmartMailboxes.plist"
+        with patch.object(sm, "icloud_plist_path", return_value=icloud):
+            out = sm.write_smart_mailboxes([], explicit)
+        assert out["paths"] == [str(explicit)]
+        assert not icloud.exists()
+
+    def test_read_prefers_icloud(self, tmp_path):
+        """Reading the mirror could list mailboxes Mail is about to discard."""
+        icloud = tmp_path / "icloud" / "SyncedSmartMailboxes.plist"
+        icloud.parent.mkdir()
+        with open(icloud, "wb") as fh:
+            plistlib.dump([{"MailboxName": "FromICloud"}], fh)
+
+        local = tmp_path / "local" / "SyncedSmartMailboxes.plist"
+        local.parent.mkdir()
+        with open(local, "wb") as fh:
+            plistlib.dump([{"MailboxName": "FromLocal"}], fh)
+
+        with patch.object(sm, "icloud_plist_path", return_value=icloud), patch.object(
+            sm, "plist_path", return_value=local
+        ):
+            assert sm.read_smart_mailboxes()[0]["MailboxName"] == "FromICloud"
+
+    def test_icloud_path_none_without_container(self, tmp_path):
+        with patch.object(sm.Path, "home", return_value=tmp_path):
+            assert sm.icloud_plist_path() is None
+
+    def test_icloud_path_picks_highest_version(self, tmp_path):
+        container = tmp_path / "Library" / "Mobile Documents" / "com~apple~mail" / "Data"
+        for v in ("V2", "V4"):
+            (container / v).mkdir(parents=True)
+        with patch.object(sm.Path, "home", return_value=tmp_path):
+            assert "V4" in str(sm.icloud_plist_path())
+
+
 class TestPlistPath:
     def test_highest_version_wins(self, tmp_path):
         for v in ("V2", "V9", "V10"):

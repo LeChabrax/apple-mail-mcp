@@ -1464,6 +1464,11 @@ the caller must surface to the user:
 - **The new mailbox appears at the next Mail launch**, not immediately.
 - The previous file is backed up beside itself before every write, and the new
   one is validated with `plutil -lint` before replacing it.
+- When Mail is in iCloud, **both** the iCloud copy
+  (`~/Library/Mobile Documents/com~apple~mail/Data/V*/`) and the local mirror are
+  written. Measured 2026-09-01: writing only the local file returns success,
+  reads back correctly, and is silently discarded at the next Mail launch — the
+  iCloud copy is what Mail keeps.
 
 ### list_smart_mailboxes
 

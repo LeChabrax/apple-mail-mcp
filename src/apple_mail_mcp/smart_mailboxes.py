@@ -34,6 +34,9 @@ HARD SAFETY RULES (each one earned)
    one parses. An invalid plist makes Mail drop all smart mailboxes silently.
 4. **Never rewrite entries we did not create.** Existing mailboxes are parsed
    and re-serialised untouched; unknown keys are preserved verbatim.
+5. **Write the iCloud copy too.** Measured on a real machine: writing only the
+   local file looks like it worked and is thrown away at the next Mail launch.
+   See ``icloud_plist_path``.
 
 PLIST SCHEMA (reverse-engineered, no public Apple documentation)
 ----------------------------------------------------------------
@@ -164,6 +167,39 @@ def plist_path(mail_root: Path | None = None) -> Path:
     return versions[0] / "MailData" / _PLIST_NAME
 
 
+def icloud_plist_path() -> Path | None:
+    """The iCloud copy, which outranks the local one. None when not synced.
+
+    MEASURED, 2026-09-01, and the reason this function exists: writing only the
+    local file silently loses the edit. A smart mailbox written to
+    ``~/Library/Mail/V10/MailData/`` was gone after relaunching Mail — the file
+    was back to an empty array — while the same content written to BOTH paths
+    survived. The "Synced" in the filename is literal: with Mail in iCloud, the
+    local file is a mirror that Mail overwrites from
+    ``~/Library/Mobile Documents/com~apple~mail/Data/V*/`` at launch.
+
+    This is invisible without relaunching Mail: the local write succeeds, the
+    file reads back correctly, and every check passes right up until Mail
+    starts and throws it away.
+
+    Returns None when the container is absent (Mail not in iCloud), which is a
+    legitimate configuration, not an error: the local file is then authoritative.
+    """
+    container = Path.home() / "Library" / "Mobile Documents" / "com~apple~mail" / "Data"
+    if not container.is_dir():
+        return None
+
+    versions = sorted(
+        (p for p in container.iterdir() if p.is_dir() and p.name.startswith("V")),
+        key=lambda p: _version_sort_key(p.name),
+        reverse=True,
+    )
+    if not versions:
+        return None
+
+    return versions[0] / _PLIST_NAME
+
+
 def _version_sort_key(name: str) -> int:
     """V10 must sort above V9, so compare numerically and not as text."""
     try:
@@ -173,7 +209,14 @@ def _version_sort_key(name: str) -> int:
 
 
 def read_smart_mailboxes(path: Path | None = None) -> list[dict[str, Any]]:
-    """Parse the plist. A missing file means "no smart mailboxes yet", not an error."""
+    """Parse the plist. A missing file means "no smart mailboxes yet", not an error.
+
+    Reads the iCloud copy when there is one, because that is the version Mail
+    will keep: reading the local mirror could report mailboxes that Mail is
+    about to discard at its next launch.
+    """
+    if path is None:
+        path = icloud_plist_path()
     target = path or plist_path()
     if not target.exists():
         return []
@@ -207,21 +250,8 @@ def _backup(target: Path) -> Path | None:
     return backup
 
 
-def write_smart_mailboxes(
-    mailboxes: list[dict[str, Any]], path: Path | None = None
-) -> dict[str, Any]:
-    """Atomically replace the plist, refusing every unsafe precondition.
-
-    Order matters: refuse on a running Mail *before* taking a backup, so a
-    rejected call leaves no trace at all.
-    """
-    if mail_is_running():
-        raise MailIsRunningError(
-            "Mail.app est ouvert. Le quitter (⌘Q) avant d'écrire : Mail réécrit "
-            "ce fichier en quittant et effacerait la modification."
-        )
-
-    target = path or plist_path()
+def _write_one(mailboxes: list[dict[str, Any]], target: Path) -> Path | None:
+    """Validate then atomically replace a single plist. Returns its backup path."""
     target.parent.mkdir(parents=True, exist_ok=True)
     backup = _backup(target)
 
@@ -248,9 +278,47 @@ def write_smart_mailboxes(
     finally:
         tmp.unlink(missing_ok=True)
 
+    return backup
+
+
+def write_smart_mailboxes(
+    mailboxes: list[dict[str, Any]], path: Path | None = None
+) -> dict[str, Any]:
+    """Atomically replace the plist(s), refusing every unsafe precondition.
+
+    Writes BOTH the iCloud copy and the local mirror when Mail is synced. See
+    ``icloud_plist_path``: writing only the local one is silently undone at the
+    next Mail launch. The iCloud copy goes first, so a failure midway leaves the
+    authoritative file already correct rather than only the mirror.
+
+    Order matters elsewhere too: refuse on a running Mail *before* taking any
+    backup, so a rejected call leaves no trace at all.
+    """
+    if mail_is_running():
+        raise MailIsRunningError(
+            "Mail.app est ouvert. Le quitter (⌘Q) avant d'écrire : Mail réécrit "
+            "ce fichier en quittant et effacerait la modification."
+        )
+
+    # An explicit path is a caller (or a test) naming its target: honour it and
+    # do not silently also write a second file it never asked about.
+    if path is not None:
+        backup = _write_one(mailboxes, path)
+        return {
+            "path": str(path),
+            "paths": [str(path)],
+            "backup": str(backup) if backup else None,
+            "count": len(mailboxes),
+        }
+
+    targets = [p for p in (icloud_plist_path(), plist_path()) if p is not None]
+    backups = [_write_one(mailboxes, t) for t in targets]
+
     return {
-        "path": str(target),
-        "backup": str(backup) if backup else None,
+        "path": str(targets[0]),
+        "paths": [str(t) for t in targets],
+        "backup": str(backups[0]) if backups[0] else None,
+        "backups": [str(b) for b in backups if b],
         "count": len(mailboxes),
     }
 
