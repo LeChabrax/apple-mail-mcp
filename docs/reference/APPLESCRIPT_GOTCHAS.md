@@ -86,7 +86,7 @@ out (-1712)` before the connector's subprocess timer. Configurable via `AppleMai
 |---------|--------|
 | Scheduled / delayed sending | Not available via AppleScript |
 | Conversation grouping | No native `thread` class — reconstructed via headers (IMAP) or subject+references (AppleScript) |
-| Smart mailbox access | Not exposed to AppleScript |
+| Smart mailbox access | Not exposed to AppleScript — the server edits `~/Library/Mail/V*/MailData/SyncedSmartMailboxes.plist` directly instead (`smart_mailboxes.py`), which is why those tools require Mail to be quit |
 | HTML body reading | `content of message` returns plain text only |
 | Read receipts | Cannot request or detect |
 | Permanent delete | No primitive bypasses Trash (#111) |

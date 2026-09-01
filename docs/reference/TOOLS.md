@@ -19,11 +19,11 @@ Every tool ships with the per-tool annotations the MCP 2025-03 spec defines so h
 
 **Classification:**
 
-- **Read-only (9):** `list_accounts`, `list_mailboxes`, `list_rules`, `list_templates`, `search_messages`, `get_messages`, `get_thread`, `get_template`, `render_template`. All have `readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`.
-- **Mutating destructive (9):** `update_message`, `update_mailbox`, `update_rule`, `update_draft`, `delete_draft`, `delete_mailbox`, `delete_messages`, `delete_rule`, `delete_template`. All have `destructiveHint=true`, `idempotentHint=true`.
-- **Mutating additive (6):** `create_mailbox`, `create_draft`, `create_rule`, `save_template`, `save_attachments`, `setup_imap`. All have `destructiveHint=false`. Idempotent except `create_draft` and `create_rule` (each call may create a new entity).
+- **Read-only (10):** `list_accounts`, `list_mailboxes`, `list_rules`, `list_smart_mailboxes`, `list_templates`, `search_messages`, `get_messages`, `get_thread`, `get_template`, `render_template`. All have `readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`.
+- **Mutating destructive (10):** `update_message`, `update_mailbox`, `update_rule`, `update_draft`, `delete_draft`, `delete_mailbox`, `delete_messages`, `delete_rule`, `delete_smart_mailbox`, `delete_template`. All have `destructiveHint=true`, `idempotentHint=true`.
+- **Mutating additive (7):** `create_mailbox`, `create_draft`, `create_rule`, `create_smart_mailbox`, `save_template`, `save_attachments`, `setup_imap`. All have `destructiveHint=false`. Idempotent except `create_draft`, `create_rule` and `create_smart_mailbox` (each call may create a new entity).
 
-**Host doesn't honor annotations?** Use the split-server config in the [README](../../README.md#optional-split-read--write-servers). Pass `--read-only` to one connector entry to expose only the 9 read tools; pair with a second non-read-only entry. Claude Desktop's per-server permission UI then naturally groups them. The two approaches compose: annotations describe the model, the split-server flag enforces it client-side.
+**Host doesn't honor annotations?** Use the split-server config in the [README](../../README.md#optional-split-read--write-servers). Pass `--read-only` to one connector entry to expose only the 10 read tools; pair with a second non-read-only entry. Claude Desktop's per-server permission UI then naturally groups them. The two approaches compose: annotations describe the model, the split-server flag enforces it client-side.
 
 ## Phase 1 Tools (v0.1.0) - Core Foundation
 
@@ -1443,3 +1443,67 @@ User-supplied `vars` override auto-fills. Missing placeholders return
 - **Phase 5+**: Further enhancements, backward compatible
 
 Breaking changes will only occur in major versions (1.0.0, 2.0.0, etc.).
+
+---
+
+## Smart Mailboxes (v0.10.0)
+
+A smart mailbox is a saved search displayed as a folder. It is the only way to
+file mail by client while keeping every message in the inbox: a rule with
+`move_to` empties the inbox, a rule with `copy_to` duplicates messages and
+doubles the mailbox quota, a smart mailbox does neither.
+
+Smart mailboxes have **no AppleScript surface** (see
+[APPLESCRIPT_GOTCHAS](APPLESCRIPT_GOTCHAS.md)), so these three tools edit
+`~/Library/Mail/V*/MailData/SyncedSmartMailboxes.plist` directly. Consequences
+the caller must surface to the user:
+
+- **Mail.app must be quit** (Cmd-Q) before `create_` or `delete_`. Mail rewrites
+  this file when it exits and would discard the change. The tools return
+  `error_type='mail_is_running'` rather than writing anyway.
+- **The new mailbox appears at the next Mail launch**, not immediately.
+- The previous file is backed up beside itself before every write, and the new
+  one is validated with `plutil -lint` before replacing it.
+
+### list_smart_mailboxes
+
+No arguments. Returns `count` and one entry per mailbox: `name`, `id`,
+`match_logic`, and `criteria` rendered as readable lines (the junk/trash/sent
+exclusions are omitted from that summary — they are plumbing, not user intent).
+
+### create_smart_mailbox
+
+- `name` (str, required): display name, e.g. `"Clients/Acme"`.
+- `criteria` (list, required): leaf `{field, value, operator}` or group
+  `{criteria: [...], all: bool}`. Groups nest, which expresses AND/OR
+  combinations the Mail UI itself cannot build.
+  - `field`: `from` | `to` | `cc` | `subject` | `body` | `any_recipient`
+  - `operator`: `contains` (default) | `does_not_contain` | `begins_with` |
+    `ends_with` | `equals` | `not_equals`
+- `match_logic` (str): `all` (AND, default) or `any` (OR) across top-level criteria.
+- `omit_junk_trash_sent` (bool, default `true`): exclude junk, trash and the
+  user's own sent mail. Without it, a client folder also shows your replies and
+  everything you deleted.
+
+```python
+create_smart_mailbox(
+    name="Clients/Acme",
+    criteria=[
+        {"criteria": [
+            {"field": "from", "value": "acme.com"},
+            {"field": "from", "value": "acme-group.fr"},
+        ], "all": False},
+        {"field": "subject", "operator": "does_not_contain", "value": "newsletter"},
+    ],
+)
+```
+
+### delete_smart_mailbox
+
+- `mailbox_id` (str): `MailboxID` from `list_smart_mailboxes`. Preferred, stable.
+- `name` (str): exact display name, used only when `mailbox_id` is absent.
+  Returns `error_type='ambiguous'` with candidates when several match, rather
+  than removing an arbitrary one.
+
+Deleting a smart mailbox never deletes mail: it removes a saved search, the
+messages stay where they were.

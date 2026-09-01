@@ -52,6 +52,16 @@ from .security import (
     validate_bulk_operation,
     validate_send_operation,
 )
+from .smart_mailboxes import (
+    MailIsRunningError,
+    SmartMailboxError,
+    build_smart_mailbox,
+    read_smart_mailboxes,
+    write_smart_mailboxes,
+)
+from .smart_mailboxes import (
+    describe as describe_smart_mailbox,
+)
 from .templates import Template, TemplateStore
 from .utils import (
     DEFAULT_MAX_BODY_BYTES,
@@ -69,7 +79,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Read-only mode (#217). The connector can be launched with `--read-only`
-# to skip registration of the 20 mutating tools so Claude Desktop users can
+# to skip registration of the 22 mutating tools so Claude Desktop users can
 # run two server entries side-by-side and batch-approve the read-only one.
 # `_pre_parse_read_only` parses argv at module load (tolerant of unknown
 # args, which `main()` parses again with the full schema) so the
@@ -3824,6 +3834,219 @@ async def forward(
     )
 
 
+def _smart_mailbox_error(operation: str, exc: Exception) -> dict[str, Any]:
+    """Map smart-mailbox failures to the server's error contract.
+
+    ``MailIsRunningError`` gets its own type because it is the only one the
+    user can fix themselves, in one gesture, and the client should be able to
+    say so without parsing the message.
+    """
+    if isinstance(exc, MailIsRunningError):
+        return {
+            "success": False,
+            "error": str(exc),
+            "error_type": "mail_is_running",
+        }
+    if isinstance(exc, SmartMailboxError):
+        return {
+            "success": False,
+            "error": str(exc),
+            "error_type": "validation_error",
+        }
+    logger.error(f"Error in {operation}: {exc}")
+    return {"success": False, "error": str(exc), "error_type": "unknown"}
+
+
+@_tool({"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True})
+def list_smart_mailboxes() -> dict[str, Any]:
+    """
+    List Mail.app smart mailboxes (saved searches shown as folders).
+
+    Smart mailboxes are the only Mail feature with no AppleScript surface, so
+    this reads their definition file directly. Unlike rules, a smart mailbox
+    never moves or copies a message: the message stays in the inbox and the
+    folder is a live view over it.
+
+    Returns:
+        Dictionary with success status, count, and one entry per mailbox
+        (name, id, match_logic, human-readable criteria).
+    """
+    try:
+        boxes = read_smart_mailboxes()
+        return {
+            "success": True,
+            "count": len(boxes),
+            "smart_mailboxes": [describe_smart_mailbox(b) for b in boxes],
+        }
+    except Exception as e:
+        return _smart_mailbox_error("list_smart_mailboxes", e)
+
+
+@_tool(
+    {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False},
+    mutating=True,
+)
+def create_smart_mailbox(
+    name: str,
+    criteria: DictList,
+    match_logic: str = "all",
+    omit_junk_trash_sent: bool = True,
+) -> dict[str, Any]:
+    """
+    Create a smart mailbox: a folder that filters mail without moving it.
+
+    Use this instead of a rule when the inbox must keep every message. A rule
+    with move_to empties the inbox; a rule with copy_to duplicates messages and
+    doubles the mailbox quota. A smart mailbox does neither.
+
+    Mail.app must be QUIT (Cmd-Q) before calling: Mail rewrites this file when
+    it exits and would discard the new mailbox. The call fails with
+    error_type='mail_is_running' rather than writing anyway. The new mailbox
+    appears the next time Mail launches.
+
+    The previous file is backed up next to itself before any write, and the new
+    one is validated with plutil before replacing it.
+
+    Args:
+        name: Display name, e.g. "Clients/Acme". Need not be unique.
+        criteria: List of criterion dicts (at least one). A leaf criterion:
+            - field: 'from' | 'to' | 'cc' | 'subject' | 'body' | 'any_recipient'
+            - value: text to match (a bare domain like "acme.com" matches every
+              address at that domain)
+            - operator: 'contains' (default) | 'does_not_contain' |
+              'begins_with' | 'ends_with' | 'equals' | 'not_equals'
+          A group criterion nests others, which is how AND/OR combinations that
+          the Mail UI cannot express are built:
+            - criteria: list of sub-criteria
+            - all: true = AND across them, false = OR
+        match_logic: 'all' (AND) or 'any' (OR) across the top-level criteria.
+        omit_junk_trash_sent: Exclude junk, trash and the user's own sent mail.
+            Default True — without it a client folder also shows your replies
+            and everything you deleted.
+
+    Returns:
+        Dictionary with success status, name, id, backup path, and total count.
+
+    Example:
+        create_smart_mailbox(
+            name="Clients/Acme",
+            criteria=[
+                {"criteria": [
+                    {"field": "from", "value": "acme.com"},
+                    {"field": "from", "value": "acme-group.fr"},
+                ], "all": False},
+                {"field": "subject", "operator": "does_not_contain",
+                 "value": "newsletter"},
+            ],
+        )
+    """
+    try:
+        rate_err = check_rate_limit("create_smart_mailbox", {"name": name})
+        if rate_err:
+            return rate_err
+
+        existing = read_smart_mailboxes()
+        mailbox = build_smart_mailbox(
+            name=name,
+            criteria=criteria,
+            match_logic=match_logic,
+            omit_junk_trash_sent=omit_junk_trash_sent,
+        )
+        written = write_smart_mailboxes(existing + [mailbox])
+
+        operation_logger.log_operation(
+            "create_smart_mailbox",
+            {"name": name, "id": mailbox["MailboxID"]},
+            "success",
+        )
+        return {
+            "success": True,
+            "name": mailbox["MailboxName"],
+            "id": mailbox["MailboxID"],
+            "backup": written["backup"],
+            "total_smart_mailboxes": written["count"],
+            "note": "Relancer Mail pour voir la nouvelle boîte.",
+        }
+    except Exception as e:
+        return _smart_mailbox_error("create_smart_mailbox", e)
+
+
+@_tool(
+    {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True},
+    mutating=True,
+)
+def delete_smart_mailbox(
+    mailbox_id: str | None = None,
+    name: str | None = None,
+) -> dict[str, Any]:
+    """
+    Delete a smart mailbox by id or by exact name.
+
+    Deleting a smart mailbox never deletes mail: it removes a saved search, and
+    the messages stay where they always were. Mail.app must be quit, same as
+    for creation, and the file is backed up before the write.
+
+    Deletion by name refuses when several mailboxes share that name, so an
+    ambiguous call cannot silently remove the wrong one — pass mailbox_id
+    (from list_smart_mailboxes) in that case.
+
+    Args:
+        mailbox_id: MailboxID from list_smart_mailboxes. Preferred: stable.
+        name: Exact display name. Used only when mailbox_id is absent.
+
+    Returns:
+        Dictionary with success status, what was removed, and backup path.
+    """
+    try:
+        if not mailbox_id and not name:
+            return {
+                "success": False,
+                "error": "mailbox_id ou name est requis",
+                "error_type": "validation_error",
+            }
+
+        existing = read_smart_mailboxes()
+        if mailbox_id:
+            matches = [b for b in existing if b.get("MailboxID") == mailbox_id]
+        else:
+            matches = [b for b in existing if b.get("MailboxName") == name]
+
+        if not matches:
+            return {
+                "success": False,
+                "error": f"Aucune boîte intelligente ne correspond à "
+                f"{mailbox_id or name!r}",
+                "error_type": "not_found",
+            }
+        if len(matches) > 1:
+            return {
+                "success": False,
+                "error": f"{len(matches)} boîtes portent le nom {name!r}. "
+                f"Passer mailbox_id pour lever l'ambiguïté.",
+                "error_type": "ambiguous",
+                "candidates": [describe_smart_mailbox(b) for b in matches],
+            }
+
+        removed = matches[0]
+        kept = [b for b in existing if b is not removed]
+        written = write_smart_mailboxes(kept)
+
+        operation_logger.log_operation(
+            "delete_smart_mailbox",
+            {"name": removed.get("MailboxName"), "id": removed.get("MailboxID")},
+            "success",
+        )
+        return {
+            "success": True,
+            "removed": describe_smart_mailbox(removed),
+            "backup": written["backup"],
+            "total_smart_mailboxes": written["count"],
+            "note": "Relancer Mail pour que la suppression soit visible.",
+        }
+    except Exception as e:
+        return _smart_mailbox_error("delete_smart_mailbox", e)
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="apple-mail-mcp",
@@ -3837,7 +4060,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Start the server with only the 11 read-only tools registered "
-            "(skips the 20 mutating tools). Pair with a second non-read-only "
+            "(skips the 22 mutating tools). Pair with a second non-read-only "
             "server entry in your MCP client to batch-approve reads while "
             "still gating writes per call. See docs/reference/TOOLS.md."
         ),
@@ -3923,8 +4146,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if _READ_ONLY:
         logger.info(
-            "Read-only mode: 20 mutating tools skipped (--read-only). "
-            "Only the 11 read tools are registered."
+            "Read-only mode: 22 mutating tools skipped (--read-only). "
+            "Only the 12 read tools are registered."
         )
     logger.info("Starting Apple Mail MCP server")
     mcp.run()

@@ -36,6 +36,7 @@ READ_ONLY_TOOLS: set[str] = {
     "get_template",
     "render_template",
     "imap_status",
+    "list_smart_mailboxes",
 }
 
 # Mutating tools, partitioned by destructiveHint.
@@ -50,6 +51,7 @@ DESTRUCTIVE_TOOLS: set[str] = {
     "delete_rule",
     "delete_template",
     "delete_account",
+    "delete_smart_mailbox",
 }
 
 ADDITIVE_TOOLS: set[str] = {
@@ -65,6 +67,8 @@ ADDITIVE_TOOLS: set[str] = {
     "reply",
     "reply_all",
     "forward",
+    # Edits the smart-mailbox plist directly: no AppleScript surface exists.
+    "create_smart_mailbox",
 }
 
 MUTATING_TOOLS = DESTRUCTIVE_TOOLS | ADDITIVE_TOOLS
@@ -73,6 +77,7 @@ MUTATING_TOOLS = DESTRUCTIVE_TOOLS | ADDITIVE_TOOLS
 NON_IDEMPOTENT_TOOLS: set[str] = {
     "create_draft",   # each call may create a new draft
     "create_rule",    # rules may be appended on each call
+    "create_smart_mailbox",  # same name twice = two mailboxes, ids differ
     "send_email",     # each call sends another message
     "reply",
     "reply_all",
@@ -185,8 +190,8 @@ class TestProductionAnnotations:
     def test_classifications_partition_correctly(self) -> None:
         """No overlap between read-only and mutating sets; counts are 11 + 20."""
         assert READ_ONLY_TOOLS.isdisjoint(MUTATING_TOOLS)
-        assert len(READ_ONLY_TOOLS) == 11
-        assert len(MUTATING_TOOLS) == 20
+        assert len(READ_ONLY_TOOLS) == 12
+        assert len(MUTATING_TOOLS) == 22
         assert DESTRUCTIVE_TOOLS.isdisjoint(ADDITIVE_TOOLS)
 
     @pytest.mark.parametrize("name", sorted(READ_ONLY_TOOLS))

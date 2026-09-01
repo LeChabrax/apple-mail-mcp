@@ -3,7 +3,7 @@
 An MCP server bridging Claude and Apple Mail via AppleScript on macOS.
 
 **Stack:** Python 3.10+, FastMCP, AppleScript (via `osascript`)
-**Version:** v0.10.2 | **Tests:** 1396 unit / 29 e2e / 62 integration | **Coverage:** 92%
+**Version:** v0.10.2 | **Tests:** 1537 unit / 29 e2e / 62 integration | **Coverage:** 92%
 
 ## Commands
 
@@ -23,7 +23,7 @@ make coverage              # Coverage report
 
 **Running the server:** `uv run python -m apple_mail_mcp.server` or via Claude Desktop config.
 
-## API Surface (24 MCP tools)
+## API Surface (34 MCP tools)
 
 **Core:** list_mailboxes, search_messages, get_messages, update_message
 **Drafts lifecycle (#134):** create_draft, update_draft, delete_draft
