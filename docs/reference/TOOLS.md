@@ -423,6 +423,38 @@ update_message(
 ---
 
 
+## Error Handling: the `remediation` field
+
+Some failures have a known fix. When a read tool fails in the shape a **missing
+IMAP fast path** produces (Mail error `-10000`, or a timeout) on an account with
+no stored IMAP password, the response carries an extra `remediation` object:
+
+```json
+{
+  "success": false,
+  "error": "Mail got an error: AppleEvent handler failed. (-10000)",
+  "error_type": "unknown",
+  "remediation": {
+    "problem": "Ce compte n'a pas la voie rapide IMAP ...",
+    "fix": "setup_imap(account=\"Exchange\")",
+    "cli": "uvx --from \"git+...@main\" apple-mail-mcp setup-imap --account \"Exchange\"",
+    "user_action": "Une fenêtre macOS demande le mot de passe DE LA BOÎTE MAIL ...",
+    "expected_gain": "... de plusieurs minutes ou un échec, à environ une seconde",
+    "verify": "imap_status()"
+  }
+}
+```
+
+**Act on it rather than reporting the raw error.** Measured in the field
+(2026-09-02): an Exchange account without the fast path made body search and
+thread reconstruction fail, and the caller had no way to know a one-line command
+fixed it. `error` and `error_type` keep their previous meaning — the field is
+additive.
+
+The hint is deliberately absent when the account is already configured (the
+cause is elsewhere) or when the failure has an unrelated shape (a missing
+mailbox, a bad date). A hint on every error is a hint nobody reads.
+
 ## Error Handling
 
 All tools return a consistent error format:
@@ -465,7 +497,39 @@ all_messages = search_messages(account="Gmail", limit=10000)
 # ... filter in Python
 ```
 
-### Error Handling
+### Error Handling: the `remediation` field
+
+Some failures have a known fix. When a read tool fails in the shape a **missing
+IMAP fast path** produces (Mail error `-10000`, or a timeout) on an account with
+no stored IMAP password, the response carries an extra `remediation` object:
+
+```json
+{
+  "success": false,
+  "error": "Mail got an error: AppleEvent handler failed. (-10000)",
+  "error_type": "unknown",
+  "remediation": {
+    "problem": "Ce compte n'a pas la voie rapide IMAP ...",
+    "fix": "setup_imap(account=\"Exchange\")",
+    "cli": "uvx --from \"git+...@main\" apple-mail-mcp setup-imap --account \"Exchange\"",
+    "user_action": "Une fenêtre macOS demande le mot de passe DE LA BOÎTE MAIL ...",
+    "expected_gain": "... de plusieurs minutes ou un échec, à environ une seconde",
+    "verify": "imap_status()"
+  }
+}
+```
+
+**Act on it rather than reporting the raw error.** Measured in the field
+(2026-09-02): an Exchange account without the fast path made body search and
+thread reconstruction fail, and the caller had no way to know a one-line command
+fixed it. `error` and `error_type` keep their previous meaning — the field is
+additive.
+
+The hint is deliberately absent when the account is already configured (the
+cause is elsewhere) or when the failure has an unrelated shape (a missing
+mailbox, a bad date). A hint on every error is a hint nobody reads.
+
+## Error Handling
 
 ```python
 # Always check success field

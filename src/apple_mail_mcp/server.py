@@ -43,6 +43,7 @@ from .exceptions import (
 )
 from .imap_connector import ImapConnectionPool
 from .mail_connector import AppleMailConnector
+from .remediation import with_remediation
 from .security import (
     _injection_scan_enabled,
     check_rate_limit,
@@ -1504,11 +1505,15 @@ def search_messages(
         }
     except Exception as e:
         logger.error(f"Error searching messages: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "error_type": "unknown",
-        }
+        # A body search that times out on an account without the IMAP fast path
+        # is THE recurring failure here, and the remedy is one call away. Ship
+        # it with the error: a caller can skip documentation, not a field in
+        # the response it just received.
+        return with_remediation(
+            {"success": False, "error": str(e), "error_type": "unknown"},
+            connector=mail,
+            account=account,
+        )
 
 
 @_tool(
@@ -1609,11 +1614,13 @@ def get_messages(
 
     except Exception as e:
         logger.error(f"Error getting messages: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "error_type": "unknown",
-        }
+        # Reading a body is the other half of the same failure: without the
+        # IMAP path, Mail is driven message by message and returns -10000.
+        # No account argument here, so the remedy names the account generically.
+        return with_remediation(
+            {"success": False, "error": str(e), "error_type": "unknown"},
+            connector=mail,
+        )
 
 
 @_tool(
@@ -1862,11 +1869,12 @@ def get_thread(message_id: str) -> dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"Error getting thread: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "error_type": "unknown",
-        }
+        # The failure from the field report: the message was found, its headers
+        # read, and rebuilding the thread died on the AppleScript path.
+        return with_remediation(
+            {"success": False, "error": str(e), "error_type": "unknown"},
+            connector=mail,
+        )
 
 
 @_tool(
