@@ -73,6 +73,71 @@ class TestFastPathProbe:
         assert rem.fast_path_is_live(self._connector(), None) is False
 
 
+class TestSlowSuccess:
+    """The case an error-only hook misses: nothing failed, everyone still loses.
+
+    Measured 2026-09-02 on real accounts: same query, 16 s and zero results on
+    an account without the fast path, 1.7 s and three results on one with it.
+    """
+
+    def _connector(self, live: bool):
+        c = MagicMock()
+        c.list_accounts.return_value = [
+            {"id": "U", "name": "iCloud", "email_addresses": ["a@icloud.com"]}
+        ]
+        c._get_imap_password_with_fallback.return_value = "x" if live else ""
+        return c
+
+    def test_slow_success_gets_the_hint(self):
+        out = rem.with_slow_path_remediation(
+            {"success": True, "messages": [], "count": 0},
+            elapsed_s=45.3,
+            connector=self._connector(live=False),
+            account="iCloud",
+        )
+        assert 'setup_imap(account="iCloud")' in out["remediation"]["fix"]
+
+    def test_the_measured_duration_is_quoted_back(self):
+        """« 45 s » is the number the user just lived through; it makes the case."""
+        out = rem.with_slow_path_remediation(
+            {"success": True},
+            elapsed_s=45.3,
+            connector=self._connector(live=False),
+            account="iCloud",
+        )
+        assert "45 s" in out["remediation"]["problem"]
+
+    def test_fast_success_stays_clean(self):
+        out = rem.with_slow_path_remediation(
+            {"success": True, "count": 3},
+            elapsed_s=1.7,
+            connector=self._connector(live=False),
+            account="Lemediapositif",
+        )
+        assert "remediation" not in out
+
+    def test_slow_but_already_configured_stays_clean(self):
+        """Slow despite IMAP means a big mailbox, not a setup problem."""
+        out = rem.with_slow_path_remediation(
+            {"success": True},
+            elapsed_s=45.0,
+            connector=self._connector(live=True),
+            account="iCloud",
+        )
+        assert "remediation" not in out
+
+    def test_threshold_boundary(self):
+        c = self._connector(live=False)
+        just_under = rem.with_slow_path_remediation(
+            {"success": True}, rem.SLOW_SUCCESS_SECONDS - 0.1, c, "iCloud"
+        )
+        at_limit = rem.with_slow_path_remediation(
+            {"success": True}, rem.SLOW_SUCCESS_SECONDS, c, "iCloud"
+        )
+        assert "remediation" not in just_under
+        assert "remediation" in at_limit
+
+
 class TestRemediationContent:
     def test_names_the_account(self):
         """« Lance setup_imap » est un conseil ; avec le compte, c'est une action."""

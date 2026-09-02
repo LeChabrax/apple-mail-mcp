@@ -131,6 +131,12 @@ def imap_setup_remediation(account: str | None) -> dict[str, Any]:
     }
 
 
+# A search that returns after this long has not failed, but the user has
+# already decided the tool is broken. Measured 2026-09-02 on a real iCloud
+# account with no fast path: 45.3 s, success=true, zero results.
+SLOW_SUCCESS_SECONDS = 10.0
+
+
 def with_remediation(
     response: dict[str, Any],
     connector: Any = None,
@@ -152,4 +158,39 @@ def with_remediation(
         return response
 
     response["remediation"] = imap_setup_remediation(account)
+    return response
+
+
+def with_slow_path_remediation(
+    response: dict[str, Any],
+    elapsed_s: float,
+    connector: Any = None,
+    account: str | None = None,
+) -> dict[str, Any]:
+    """Attach the remedy to a SUCCESSFUL response that took far too long.
+
+    The case that actually costs teams their trust, and the one an error-only
+    hook misses entirely. Measured on a real account: a body search returned
+    ``success: true`` after 45.3 s. Nothing failed, so no error path ran, so no
+    remedy was offered — while the person watching the spinner concluded the
+    connector was broken and stopped using it.
+
+    A ``warnings`` entry already said as much in prose. It travelled at the
+    bottom of a successful payload, in a list callers skim past on success.
+    The same fact as a structured field, on the response the caller is already
+    reading, is the difference between a fix applied and a tool abandoned.
+    """
+    if elapsed_s < SLOW_SUCCESS_SECONDS:
+        return response
+    if fast_path_is_live(connector, account):
+        # Slow despite the fast path: a huge mailbox, a cold cache, something
+        # else. Blaming IMAP setup here would send the user to a dead end.
+        return response
+
+    remedy = imap_setup_remediation(account)
+    remedy["problem"] = (
+        f"Cette recherche a pris {elapsed_s:.0f} s parce que ce compte n'a pas "
+        f"la voie rapide IMAP : Mail.app est piloté message par message."
+    )
+    response["remediation"] = remedy
     return response

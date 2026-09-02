@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -43,7 +44,7 @@ from .exceptions import (
 )
 from .imap_connector import ImapConnectionPool
 from .mail_connector import AppleMailConnector
-from .remediation import with_remediation
+from .remediation import with_remediation, with_slow_path_remediation
 from .security import (
     _injection_scan_enabled,
     check_rate_limit,
@@ -1440,6 +1441,7 @@ def search_messages(
             f"has_attachment={has_attachment}"
         )
 
+        search_started_at = time.perf_counter()
         messages = mail.search_messages(
             account=account,
             mailbox=mailbox,
@@ -1487,7 +1489,15 @@ def search_messages(
         }
         if warnings:
             response["warnings"] = warnings
-        return response
+        # A slow SUCCESS is the failure that actually loses users: nothing
+        # errored, so no error path runs, while the person watching a 45 s
+        # spinner concludes the connector is broken. Measured 2026-09-02.
+        return with_slow_path_remediation(
+            response,
+            time.perf_counter() - search_started_at,
+            connector=mail,
+            account=account,
+        )
 
     except (MailAccountNotFoundError, MailMailboxNotFoundError) as e:
         logger.error(f"Not found error: {e}")

@@ -451,9 +451,17 @@ thread reconstruction fail, and the caller had no way to know a one-line command
 fixed it. `error` and `error_type` keep their previous meaning — the field is
 additive.
 
+`search_messages` also attaches it to a **successful but slow** response
+(over 10 s), which is the version of this problem that actually loses users:
+nothing errors, so no error path runs, while the person watching the spinner
+concludes the connector is broken. Measured 2026-09-02 with the same query on
+two real accounts — 16 s and zero results without the fast path, 1.7 s and
+three results with it.
+
 The hint is deliberately absent when the account is already configured (the
-cause is elsewhere) or when the failure has an unrelated shape (a missing
-mailbox, a bad date). A hint on every error is a hint nobody reads.
+cause is elsewhere, e.g. a very large mailbox) or when the failure has an
+unrelated shape (a missing mailbox, a bad date). A hint on every response is a
+hint nobody reads.
 
 ## Error Handling
 
@@ -525,9 +533,17 @@ thread reconstruction fail, and the caller had no way to know a one-line command
 fixed it. `error` and `error_type` keep their previous meaning — the field is
 additive.
 
+`search_messages` also attaches it to a **successful but slow** response
+(over 10 s), which is the version of this problem that actually loses users:
+nothing errors, so no error path runs, while the person watching the spinner
+concludes the connector is broken. Measured 2026-09-02 with the same query on
+two real accounts — 16 s and zero results without the fast path, 1.7 s and
+three results with it.
+
 The hint is deliberately absent when the account is already configured (the
-cause is elsewhere) or when the failure has an unrelated shape (a missing
-mailbox, a bad date). A hint on every error is a hint nobody reads.
+cause is elsewhere, e.g. a very large mailbox) or when the failure has an
+unrelated shape (a missing mailbox, a bad date). A hint on every response is a
+hint nobody reads.
 
 ## Error Handling
 
