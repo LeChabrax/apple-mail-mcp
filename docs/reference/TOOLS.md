@@ -451,12 +451,19 @@ thread reconstruction fail, and the caller had no way to know a one-line command
 fixed it. `error` and `error_type` keep their previous meaning — the field is
 additive.
 
-`search_messages` also attaches it to a **successful but slow** response
-(over 10 s), which is the version of this problem that actually loses users:
+`search_messages`, `get_messages` and `get_thread` also attach it to a
+**successful but slow** response (over 10 s), which is the version of this
+problem that actually loses users:
 nothing errors, so no error path runs, while the person watching the spinner
 concludes the connector is broken. Measured 2026-09-02 with the same query on
 two real accounts — 16 s and zero results without the fast path, 1.7 s and
 three results with it.
+
+`get_thread` takes no `account` argument, so it asks a coarser question: does
+**any** account have the fast path? If one does, it stays silent — showing the
+hint to someone whose accounts are all configured is the surest way to teach
+them to ignore it. When no account name is available the remediation carries a
+`first` step (`imap_status()`) to look up the exact name.
 
 The hint is deliberately absent when the account is already configured (the
 cause is elsewhere, e.g. a very large mailbox) or when the failure has an
@@ -533,12 +540,19 @@ thread reconstruction fail, and the caller had no way to know a one-line command
 fixed it. `error` and `error_type` keep their previous meaning — the field is
 additive.
 
-`search_messages` also attaches it to a **successful but slow** response
-(over 10 s), which is the version of this problem that actually loses users:
+`search_messages`, `get_messages` and `get_thread` also attach it to a
+**successful but slow** response (over 10 s), which is the version of this
+problem that actually loses users:
 nothing errors, so no error path runs, while the person watching the spinner
 concludes the connector is broken. Measured 2026-09-02 with the same query on
 two real accounts — 16 s and zero results without the fast path, 1.7 s and
 three results with it.
+
+`get_thread` takes no `account` argument, so it asks a coarser question: does
+**any** account have the fast path? If one does, it stays silent — showing the
+hint to someone whose accounts are all configured is the surest way to teach
+them to ignore it. When no account name is available the remediation carries a
+`first` step (`imap_status()`) to look up the exact name.
 
 The hint is deliberately absent when the account is already configured (the
 cause is elsewhere, e.g. a very large mailbox) or when the failure has an

@@ -73,12 +73,20 @@ def fast_path_is_live(connector: Any, account: str | None) -> bool:
     The cost of a needless hint is one ignored line; the cost of hiding it is
     the failure this module exists for.
     """
-    if not account or connector is None:
+    if connector is None:
         return False
 
     probe = getattr(connector, "_get_imap_password_with_fallback", None)
     if probe is None:
         return False
+
+    if not account:
+        # Some tools (get_thread) take no account: the message id alone decides
+        # which mailbox is read. Treating that as "not configured" would show
+        # the hint to someone whose accounts are ALL set up — a false positive
+        # that teaches them to ignore the field. Fall back to the only honest
+        # question available: does any account have the fast path at all?
+        return _any_account_is_live(connector, probe)
 
     try:
         # The keychain entry is keyed on (account, email), so the email has to
@@ -91,6 +99,33 @@ def fast_path_is_live(connector: Any, account: str | None) -> bool:
     except Exception as exc:  # noqa: BLE001
         logger.debug("IMAP password probe failed for %s: %s", account, exc)
         return False
+
+
+def _any_account_is_live(connector: Any, probe: Any) -> bool:
+    """True as soon as one account has a stored IMAP password.
+
+    Deliberately optimistic: on a machine where the fast path is set up, a slow
+    read has another cause, and pointing at setup_imap would waste the user's
+    time. On a machine where NO account is configured — the reported case — it
+    stays false and the hint appears.
+    """
+    try:
+        accounts = connector.list_accounts() or []
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Account listing failed: %s", exc)
+        return False
+
+    for entry in accounts:
+        emails = entry.get("email_addresses") or []
+        name = entry.get("name")
+        if not emails or not name:
+            continue
+        try:
+            if probe(name, emails[0]):
+                return True
+        except Exception:  # noqa: BLE001
+            continue
+    return False
 
 
 def _email_of(connector: Any, account: str) -> str | None:
@@ -166,6 +201,7 @@ def with_slow_path_remediation(
     elapsed_s: float,
     connector: Any = None,
     account: str | None = None,
+    operation: str = "Cette recherche",
 ) -> dict[str, Any]:
     """Attach the remedy to a SUCCESSFUL response that took far too long.
 
@@ -189,8 +225,15 @@ def with_slow_path_remediation(
 
     remedy = imap_setup_remediation(account)
     remedy["problem"] = (
-        f"Cette recherche a pris {elapsed_s:.0f} s parce que ce compte n'a pas "
-        f"la voie rapide IMAP : Mail.app est piloté message par message."
+        f"{operation} a pris {elapsed_s:.0f} s parce que la voie rapide IMAP "
+        f"n'est pas active : Mail.app est piloté message par message."
     )
+    if not account:
+        # Without an account name the instruction is a template, so say where
+        # to get the real one instead of leaving a placeholder to guess at.
+        remedy["first"] = (
+            "Lancer imap_status() pour lire le nom exact du compte, puis "
+            "reprendre la commande ci-dessous avec ce nom."
+        )
     response["remediation"] = remedy
     return response

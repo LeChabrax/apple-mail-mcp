@@ -1601,6 +1601,7 @@ def get_messages(
 
         logger.info(f"Getting messages: {len(message_ids)} ids")
 
+        read_started_at = time.perf_counter()
         messages = _resolve_id_list_to_messages(
             message_ids,
             include_content=include_content,
@@ -1616,11 +1617,19 @@ def get_messages(
             "success"
         )
 
-        return {
-            "success": True,
-            "messages": messages,
-            "count": len(messages),
-        }
+        # Reading bodies message by message is the slow path's other half:
+        # it succeeds, slowly, and the caller has no way to know why.
+        return with_slow_path_remediation(
+            {
+                "success": True,
+                "messages": messages,
+                "count": len(messages),
+            },
+            time.perf_counter() - read_started_at,
+            connector=mail,
+            account=account,
+            operation="La lecture de ces messages",
+        )
 
     except Exception as e:
         logger.error(f"Error getting messages: {e}")
@@ -1858,17 +1867,26 @@ def get_thread(message_id: str) -> dict[str, Any]:
 
         logger.info(f"Getting thread for message: {message_id}")
 
+        thread_started_at = time.perf_counter()
         thread = mail.get_thread(message_id)
 
         operation_logger.log_operation(
             "get_thread", {"message_id": message_id}, "success"
         )
 
-        return {
-            "success": True,
-            "thread": thread,
-            "count": len(thread),
-        }
+        # Measured 2026-09-02: 33.5 s, success=true, no hint — the exact call
+        # from the field report. get_thread takes no account argument, so the
+        # remedy names the account generically; the duration carries the case.
+        return with_slow_path_remediation(
+            {
+                "success": True,
+                "thread": thread,
+                "count": len(thread),
+            },
+            time.perf_counter() - thread_started_at,
+            connector=mail,
+            operation="La reconstruction de ce fil",
+        )
 
     except MailMessageNotFoundError as e:
         logger.error(f"Message not found: {e}")

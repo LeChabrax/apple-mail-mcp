@@ -68,9 +68,12 @@ class TestFastPathProbe:
     def test_unknown_account_reports_not_live(self):
         assert rem.fast_path_is_live(self._connector(), "Nope") is False
 
-    def test_no_connector_or_account_reports_not_live(self):
+    def test_no_connector_reports_not_live(self):
         assert rem.fast_path_is_live(None, "Exchange") is False
-        assert rem.fast_path_is_live(self._connector(), None) is False
+
+    def test_no_account_falls_back_to_the_whole_machine(self):
+        """Not "unknown, assume broken": see TestAccountlessTools for why."""
+        assert rem.fast_path_is_live(self._connector(), None) is True
 
 
 class TestSlowSuccess:
@@ -136,6 +139,62 @@ class TestSlowSuccess:
         )
         assert "remediation" not in just_under
         assert "remediation" in at_limit
+
+
+class TestAccountlessTools:
+    """get_thread takes no account, and that nearly produced a false positive.
+
+    Treating "no account given" as "not configured" would have shown the hint
+    to every user whose accounts are all set up — the surest way to teach them
+    to ignore it.
+    """
+
+    def _connector(self, live_names):
+        c = MagicMock()
+        c.list_accounts.return_value = [
+            {"id": "U1", "name": "iCloud", "email_addresses": ["a@icloud.com"]},
+            {"id": "U2", "name": "LMP", "email_addresses": ["a@lmp.com"]},
+        ]
+        c._get_imap_password_with_fallback.side_effect = (
+            lambda name, email: "x" if name in live_names else ""
+        )
+        return c
+
+    def test_one_configured_account_is_enough_to_stay_silent(self):
+        """Measured on a real machine: LMP configured, iCloud not, 32 s thread."""
+        assert rem.fast_path_is_live(self._connector({"LMP"}), None) is True
+
+    def test_no_configured_account_shows_the_hint(self):
+        assert rem.fast_path_is_live(self._connector(set()), None) is False
+
+    def test_unlistable_accounts_show_the_hint(self):
+        c = MagicMock()
+        c.list_accounts.side_effect = RuntimeError("Mail not running")
+        assert rem.fast_path_is_live(c, None) is False
+
+    def test_operation_wording_follows_the_caller(self):
+        """« Cette recherche » on a thread rebuild reads as a bug in the message."""
+        out = rem.with_slow_path_remediation(
+            {"success": True},
+            33.5,
+            self._connector(set()),
+            None,
+            "La reconstruction de ce fil",
+        )
+        assert out["remediation"]["problem"].startswith("La reconstruction de ce fil")
+
+    def test_missing_account_says_where_to_find_it(self):
+        """A placeholder alone leaves the caller guessing; name the lookup."""
+        out = rem.with_slow_path_remediation(
+            {"success": True}, 33.5, self._connector(set()), None
+        )
+        assert "imap_status()" in out["remediation"]["first"]
+
+    def test_named_account_needs_no_lookup_step(self):
+        out = rem.with_slow_path_remediation(
+            {"success": True}, 33.5, self._connector(set()), "iCloud"
+        )
+        assert "first" not in out["remediation"]
 
 
 class TestRemediationContent:
