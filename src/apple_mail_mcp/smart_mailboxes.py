@@ -84,9 +84,12 @@ logger = logging.getLogger(__name__)
 # Mail.app rewrites this file on quit; see rule 1 above.
 _PLIST_NAME = "SyncedSmartMailboxes.plist"
 
-# MailboxType 7 = top-level smart mailbox. Nested ones use 0, which we do not
-# emit: the value is only meaningful inside a MailboxChildren array.
+# MailboxType 7 = a smart mailbox. Type 8 is a *folder* of smart mailboxes: it
+# carries no criteria of its own and exists only to hold MailboxChildren. That
+# distinction is what makes "Clients" a real group in the sidebar rather than a
+# mailbox whose name happens to contain a slash.
 _MAILBOX_TYPE_SMART = 7
+_MAILBOX_TYPE_FOLDER = 8
 
 # Observed on real installations. Mail recomputes these flags itself, so the
 # value only has to be plausible on first read.
@@ -308,7 +311,7 @@ def write_smart_mailboxes(
             "path": str(path),
             "paths": [str(path)],
             "backup": str(backup) if backup else None,
-            "count": len(mailboxes),
+            "count": count_entries(mailboxes),
         }
 
     targets = [p for p in (icloud_plist_path(), plist_path()) if p is not None]
@@ -319,8 +322,23 @@ def write_smart_mailboxes(
         "paths": [str(t) for t in targets],
         "backup": str(backups[0]) if backups[0] else None,
         "backups": [str(b) for b in backups if b],
-        "count": len(mailboxes),
+        "count": count_entries(mailboxes),
     }
+
+
+def count_entries(mailboxes: list[dict[str, Any]]) -> int:
+    """Total across the whole tree.
+
+    Counting the root list only would report "1 mailbox" after filing ten
+    clients under a folder, which is the number the user is checking against.
+    """
+    total = 0
+    for entry in mailboxes:
+        total += 1
+        children = entry.get("MailboxChildren")
+        if isinstance(children, list):
+            total += count_entries(children)
+    return total
 
 
 def _new_id() -> str:
@@ -438,11 +456,146 @@ def build_smart_mailbox(
     }
 
 
+def build_folder(name: str) -> dict[str, Any]:
+    """A container that groups smart mailboxes in the sidebar.
+
+    Type 8, no criteria: it matches nothing itself, it only holds children.
+    Without it, "Clients/Acme" is a single mailbox with a slash in its name,
+    which is a naming convention, not a group the user can collapse.
+    """
+    if not name or not name.strip():
+        raise SmartMailboxError("Le nom du dossier est vide")
+    return {
+        "MailboxName": name.strip(),
+        "MailboxID": _new_id(),
+        "MailboxType": _MAILBOX_TYPE_FOLDER,
+        "IMAPMailboxAttributes": _IMAP_MAILBOX_ATTRIBUTES,
+        "MailboxChildren": [],
+    }
+
+
+def is_folder(mailbox: dict[str, Any]) -> bool:
+    return mailbox.get("MailboxType") == _MAILBOX_TYPE_FOLDER
+
+
+def find_mailbox(
+    mailboxes: list[dict[str, Any]],
+    mailbox_id: str | None = None,
+    name: str | None = None,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
+    """Locate one entry anywhere in the tree.
+
+    Returns ``(entry, siblings, matches)``. ``siblings`` is the list that
+    actually holds it, so a caller can remove or reorder it without knowing how
+    deep it was. ``matches`` carries every hit, because deleting by name when
+    two mailboxes share it must be refused, not resolved arbitrarily.
+    """
+    matches: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+
+    def walk(container: list[dict[str, Any]]) -> None:
+        for entry in container:
+            hit = (
+                entry.get("MailboxID") == mailbox_id
+                if mailbox_id
+                else entry.get("MailboxName") == name
+            )
+            if hit:
+                matches.append((entry, container))
+            children = entry.get("MailboxChildren")
+            if isinstance(children, list):
+                walk(children)
+
+    walk(mailboxes)
+    if not matches:
+        return None, mailboxes, []
+    entry, siblings = matches[0]
+    return entry, siblings, [m[0] for m in matches]
+
+
+def insert_mailbox(
+    mailboxes: list[dict[str, Any]],
+    mailbox: dict[str, Any],
+    parent: str | None = None,
+) -> list[dict[str, Any]]:
+    """Add an entry at the root, or inside ``parent``, creating it if needed.
+
+    Creating the missing parent rather than failing is deliberate: the caller
+    files ten clients into "Clients" in a loop, and requiring a separate folder
+    call first would make the first iteration a special case.
+    """
+    if not parent:
+        return mailboxes + [mailbox]
+
+    result = [dict(m) for m in mailboxes]
+    entry, _, _ = find_mailbox(result, name=parent)
+
+    if entry is None:
+        folder = build_folder(parent)
+        folder["MailboxChildren"] = [mailbox]
+        return result + [folder]
+
+    if not is_folder(entry):
+        raise SmartMailboxError(
+            f"{parent!r} est une boîte intelligente, pas un dossier : "
+            f"elle ne peut pas contenir d'autres boîtes"
+        )
+
+    children = entry.get("MailboxChildren")
+    entry["MailboxChildren"] = ([] if not isinstance(children, list) else children) + [
+        mailbox
+    ]
+    return result
+
+
+def rename_mailbox(mailbox: dict[str, Any], new_name: str) -> dict[str, Any]:
+    """Change the display name in place. Ids are untouched: they are the anchor."""
+    if not new_name or not new_name.strip():
+        raise SmartMailboxError("Le nouveau nom est vide")
+    mailbox["MailboxName"] = new_name.strip()
+    return mailbox
+
+
+def replace_criteria(
+    mailbox: dict[str, Any],
+    criteria: list[dict[str, Any]],
+    match_logic: str = "all",
+    omit_junk_trash_sent: bool = True,
+) -> dict[str, Any]:
+    """Swap a mailbox's criteria while keeping its id, name and children.
+
+    Rebuilt rather than patched: criteria carry unique ids and nested compounds,
+    so editing one branch in place is where a half-valid tree would come from.
+    Keeping the id matters because it is what the caller stored to find this
+    mailbox again.
+    """
+    rebuilt = build_smart_mailbox(
+        name=mailbox.get("MailboxName") or "sans nom",
+        criteria=criteria,
+        match_logic=match_logic,
+        omit_junk_trash_sent=omit_junk_trash_sent,
+    )
+    mailbox["MailboxCriteria"] = rebuilt["MailboxCriteria"]
+    mailbox["MailboxAllCriteriaMustBeSatisfied"] = rebuilt[
+        "MailboxAllCriteriaMustBeSatisfied"
+    ]
+    return mailbox
+
+
 def describe(mailbox: dict[str, Any]) -> dict[str, Any]:
     """Human-readable summary of one entry, for list_smart_mailboxes."""
+    if is_folder(mailbox):
+        return {
+            "name": mailbox.get("MailboxName"),
+            "id": mailbox.get("MailboxID"),
+            "type": "folder",
+            "children": [
+                describe(c) for c in (mailbox.get("MailboxChildren") or [])
+            ],
+        }
     return {
         "name": mailbox.get("MailboxName"),
         "id": mailbox.get("MailboxID"),
+        "type": "smart_mailbox",
         "match_logic": _summarise_logic(mailbox),
         "criteria": _summarise_criteria(mailbox.get("MailboxCriteria") or []),
     }

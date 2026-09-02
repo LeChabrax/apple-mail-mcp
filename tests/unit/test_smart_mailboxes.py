@@ -312,6 +312,128 @@ class TestICloudMirror:
             assert "V4" in str(sm.icloud_plist_path())
 
 
+class TestHierarchy:
+    """Folders (type 8) vs mailboxes (type 7), and finding things inside them."""
+
+    def _mb(self, name="Acme", value="acme.com"):
+        return sm.build_smart_mailbox(name, [{"field": "from", "value": value}])
+
+    def test_no_parent_lands_at_root(self):
+        tree = sm.insert_mailbox([], self._mb())
+        assert len(tree) == 1
+        assert not sm.is_folder(tree[0])
+
+    def test_missing_parent_is_created(self):
+        """Filing ten clients in a loop must not make the first one special."""
+        tree = sm.insert_mailbox([], self._mb(), parent="Clients")
+        assert sm.is_folder(tree[0])
+        assert tree[0]["MailboxName"] == "Clients"
+        assert tree[0]["MailboxChildren"][0]["MailboxName"] == "Acme"
+
+    def test_existing_parent_is_reused(self):
+        tree = sm.insert_mailbox([], self._mb("Acme", "acme.com"), parent="Clients")
+        tree = sm.insert_mailbox(tree, self._mb("Bayard", "bayard.com"), parent="Clients")
+        assert len(tree) == 1
+        assert len(tree[0]["MailboxChildren"]) == 2
+
+    def test_folder_carries_no_criteria(self):
+        """A folder that matched something would double every client's mail."""
+        folder = sm.build_folder("Clients")
+        assert "MailboxCriteria" not in folder
+        assert folder["MailboxType"] == 8
+
+    def test_smart_mailbox_refused_as_parent(self):
+        tree = [self._mb("Acme", "acme.com")]
+        with pytest.raises(sm.SmartMailboxError, match="pas un dossier"):
+            sm.insert_mailbox(tree, self._mb("Sub", "sub.com"), parent="Acme")
+
+    def test_empty_folder_name_refused(self):
+        with pytest.raises(sm.SmartMailboxError):
+            sm.build_folder("  ")
+
+    def test_find_reaches_into_folders(self):
+        tree = sm.insert_mailbox([], self._mb("Bayard", "bayard.com"), parent="Clients")
+        entry, siblings, matches = sm.find_mailbox(tree, name="Bayard")
+        assert entry["MailboxName"] == "Bayard"
+        assert siblings is tree[0]["MailboxChildren"]
+        assert len(matches) == 1
+
+    def test_find_reports_every_namesake(self):
+        """Deleting by an ambiguous name must be refusable, so all hits surface."""
+        tree = sm.insert_mailbox([], self._mb("Acme", "a.com"), parent="Clients")
+        tree = sm.insert_mailbox(tree, self._mb("Acme", "b.com"))
+        _, _, matches = sm.find_mailbox(tree, name="Acme")
+        assert len(matches) == 2
+
+    def test_find_returns_none_when_absent(self):
+        entry, _, matches = sm.find_mailbox([], name="Nope")
+        assert entry is None and matches == []
+
+    def test_siblings_list_allows_removal_at_depth(self):
+        tree = sm.insert_mailbox([], self._mb("Acme", "acme.com"), parent="Clients")
+        entry, siblings, _ = sm.find_mailbox(tree, name="Acme")
+        siblings.remove(entry)
+        assert tree[0]["MailboxChildren"] == []
+
+    def test_count_includes_nested_entries(self):
+        """After filing 2 clients in a folder the user expects 3, not 1."""
+        tree = sm.insert_mailbox([], self._mb("A", "a.com"), parent="Clients")
+        tree = sm.insert_mailbox(tree, self._mb("B", "b.com"), parent="Clients")
+        assert sm.count_entries(tree) == 3
+
+    def test_describe_renders_a_folder_with_its_children(self):
+        tree = sm.insert_mailbox([], self._mb("Acme", "acme.com"), parent="Clients")
+        out = sm.describe(tree[0])
+        assert out["type"] == "folder"
+        assert out["children"][0]["name"] == "Acme"
+        assert out["children"][0]["type"] == "smart_mailbox"
+
+    def test_insert_does_not_mutate_the_caller_list(self):
+        original = [self._mb("Acme", "acme.com")]
+        sm.insert_mailbox(original, self._mb("B", "b.com"), parent="Clients")
+        assert len(original) == 1
+
+
+class TestEdit:
+    def test_rename_keeps_the_id(self):
+        """The id is what a caller stored to find this mailbox again."""
+        mb = sm.build_smart_mailbox("Acme", [{"field": "from", "value": "acme.com"}])
+        before = mb["MailboxID"]
+        sm.rename_mailbox(mb, "Acme Group")
+        assert mb["MailboxName"] == "Acme Group"
+        assert mb["MailboxID"] == before
+
+    def test_rename_refuses_empty(self):
+        mb = sm.build_smart_mailbox("Acme", [{"field": "from", "value": "acme.com"}])
+        with pytest.raises(sm.SmartMailboxError):
+            sm.rename_mailbox(mb, "   ")
+
+    def test_replace_criteria_keeps_identity_and_children(self):
+        mb = sm.build_smart_mailbox("Acme", [{"field": "from", "value": "old.com"}])
+        mb["MailboxChildren"] = [{"MailboxName": "keep me"}]
+        before = (mb["MailboxID"], mb["MailboxName"])
+
+        sm.replace_criteria(mb, [{"field": "from", "value": "new.com"}])
+
+        assert (mb["MailboxID"], mb["MailboxName"]) == before
+        assert mb["MailboxChildren"] == [{"MailboxName": "keep me"}]
+        assert sm.describe(mb)["criteria"] == ["from contains 'new.com'"]
+
+    def test_replace_criteria_updates_logic(self):
+        mb = sm.build_smart_mailbox("Acme", [{"field": "from", "value": "a.com"}])
+        sm.replace_criteria(
+            mb,
+            [{"field": "from", "value": "a.com"}, {"field": "from", "value": "b.com"}],
+            match_logic="any",
+        )
+        assert sm.describe(mb)["match_logic"] == "any"
+
+    def test_replace_criteria_refuses_empty(self):
+        mb = sm.build_smart_mailbox("Acme", [{"field": "from", "value": "a.com"}])
+        with pytest.raises(sm.SmartMailboxError):
+            sm.replace_criteria(mb, [])
+
+
 class TestPlistPath:
     def test_highest_version_wins(self, tmp_path):
         for v in ("V2", "V9", "V10"):

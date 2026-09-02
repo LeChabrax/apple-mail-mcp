@@ -20,7 +20,7 @@ Every tool ships with the per-tool annotations the MCP 2025-03 spec defines so h
 **Classification:**
 
 - **Read-only (10):** `list_accounts`, `list_mailboxes`, `list_rules`, `list_smart_mailboxes`, `list_templates`, `search_messages`, `get_messages`, `get_thread`, `get_template`, `render_template`. All have `readOnlyHint=true`, `destructiveHint=false`, `idempotentHint=true`.
-- **Mutating destructive (10):** `update_message`, `update_mailbox`, `update_rule`, `update_draft`, `delete_draft`, `delete_mailbox`, `delete_messages`, `delete_rule`, `delete_smart_mailbox`, `delete_template`. All have `destructiveHint=true`, `idempotentHint=true`.
+- **Mutating destructive (11):** `update_message`, `update_mailbox`, `update_rule`, `update_draft`, `update_smart_mailbox`, `delete_draft`, `delete_mailbox`, `delete_messages`, `delete_rule`, `delete_smart_mailbox`, `delete_template`. All have `destructiveHint=true`, `idempotentHint=true`.
 - **Mutating additive (7):** `create_mailbox`, `create_draft`, `create_rule`, `create_smart_mailbox`, `save_template`, `save_attachments`, `setup_imap`. All have `destructiveHint=false`. Idempotent except `create_draft`, `create_rule` and `create_smart_mailbox` (each call may create a new entity).
 
 **Host doesn't honor annotations?** Use the split-server config in the [README](../../README.md#optional-split-read--write-servers). Pass `--read-only` to one connector entry to expose only the 10 read tools; pair with a second non-read-only entry. Claude Desktop's per-server permission UI then naturally groups them. The two approaches compose: annotations describe the model, the split-server flag enforces it client-side.
@@ -1489,10 +1489,15 @@ exclusions are omitted from that summary — they are plumbing, not user intent)
 - `omit_junk_trash_sent` (bool, default `true`): exclude junk, trash and the
   user's own sent mail. Without it, a client folder also shows your replies and
   everything you deleted.
+- `parent` (str, optional): containing folder, e.g. `"Clients"`. Created on
+  demand, so filing many clients in a loop needs no separate call. Prefer this
+  over naming a mailbox `"Clients/Acme"`: a real folder (plist type 8, no
+  criteria of its own) collapses in the sidebar, a slash in a name does not.
 
 ```python
 create_smart_mailbox(
-    name="Clients/Acme",
+    name="Acme",
+    parent="Clients",
     criteria=[
         {"criteria": [
             {"field": "from", "value": "acme.com"},
@@ -1503,6 +1508,19 @@ create_smart_mailbox(
 )
 ```
 
+### update_smart_mailbox
+
+Rename a smart mailbox and/or replace its criteria. Patch semantics: unset
+fields are unchanged, and the mailbox keeps its `MailboxID`.
+
+- `mailbox_id` / `name`: which one to edit (same resolution as delete).
+- `new_name` (str, optional): new display name.
+- `criteria` (list, optional): **full replacement**, same schema as
+  `create_smart_mailbox`. Criteria form a tree of uniquely-identified nested
+  compounds, so they are replaced wholesale rather than merged — read the
+  current ones with `list_smart_mailboxes` first if you mean to keep some.
+- `match_logic`, `omit_junk_trash_sent`: only read when `criteria` is provided.
+
 ### delete_smart_mailbox
 
 - `mailbox_id` (str): `MailboxID` from `list_smart_mailboxes`. Preferred, stable.
@@ -1511,4 +1529,6 @@ create_smart_mailbox(
   than removing an arbitrary one.
 
 Deleting a smart mailbox never deletes mail: it removes a saved search, the
-messages stay where they were.
+messages stay where they were. Deleting a **folder** also removes the mailboxes
+inside it — their names come back in `also_removed` rather than disappearing
+unmentioned.

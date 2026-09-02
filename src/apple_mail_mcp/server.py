@@ -56,7 +56,11 @@ from .smart_mailboxes import (
     MailIsRunningError,
     SmartMailboxError,
     build_smart_mailbox,
+    find_mailbox,
+    insert_mailbox,
     read_smart_mailboxes,
+    rename_mailbox,
+    replace_criteria,
     write_smart_mailboxes,
 )
 from .smart_mailboxes import (
@@ -79,7 +83,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Read-only mode (#217). The connector can be launched with `--read-only`
-# to skip registration of the 22 mutating tools so Claude Desktop users can
+# to skip registration of the 23 mutating tools so Claude Desktop users can
 # run two server entries side-by-side and batch-approve the read-only one.
 # `_pre_parse_read_only` parses argv at module load (tolerant of unknown
 # args, which `main()` parses again with the full schema) so the
@@ -3891,6 +3895,7 @@ def create_smart_mailbox(
     criteria: DictList,
     match_logic: str = "all",
     omit_junk_trash_sent: bool = True,
+    parent: str | None = None,
 ) -> dict[str, Any]:
     """
     Create a smart mailbox: a folder that filters mail without moving it.
@@ -3923,13 +3928,18 @@ def create_smart_mailbox(
         omit_junk_trash_sent: Exclude junk, trash and the user's own sent mail.
             Default True — without it a client folder also shows your replies
             and everything you deleted.
+        parent: Name of a containing folder, e.g. "Clients". Created if it does
+            not exist yet, so filing many clients in a loop needs no separate
+            call. Prefer this over naming a mailbox "Clients/Acme": a real
+            folder collapses in the sidebar, a slash in a name does not.
 
     Returns:
         Dictionary with success status, name, id, backup path, and total count.
 
     Example:
         create_smart_mailbox(
-            name="Clients/Acme",
+            name="Acme",
+            parent="Clients",
             criteria=[
                 {"criteria": [
                     {"field": "from", "value": "acme.com"},
@@ -3952,23 +3962,120 @@ def create_smart_mailbox(
             match_logic=match_logic,
             omit_junk_trash_sent=omit_junk_trash_sent,
         )
-        written = write_smart_mailboxes(existing + [mailbox])
+        written = write_smart_mailboxes(insert_mailbox(existing, mailbox, parent))
 
         operation_logger.log_operation(
             "create_smart_mailbox",
-            {"name": name, "id": mailbox["MailboxID"]},
+            {"name": name, "id": mailbox["MailboxID"], "parent": parent},
             "success",
         )
         return {
             "success": True,
             "name": mailbox["MailboxName"],
             "id": mailbox["MailboxID"],
+            "parent": parent,
             "backup": written["backup"],
             "total_smart_mailboxes": written["count"],
             "note": "Relancer Mail pour voir la nouvelle boîte.",
         }
     except Exception as e:
         return _smart_mailbox_error("create_smart_mailbox", e)
+
+
+@_tool(
+    {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": True},
+    mutating=True,
+)
+def update_smart_mailbox(
+    mailbox_id: str | None = None,
+    name: str | None = None,
+    new_name: str | None = None,
+    criteria: DictList | None = None,
+    match_logic: str = "all",
+    omit_junk_trash_sent: bool = True,
+) -> dict[str, Any]:
+    """
+    Rename a smart mailbox and/or replace its criteria.
+
+    Patch semantics: unset fields are unchanged. The mailbox keeps its id, so
+    anything the caller stored to find it again keeps working.
+
+    Criteria are replaced wholesale rather than merged — they form a tree of
+    uniquely-identified nested compounds, and patching one branch is where a
+    half-valid tree would come from. Read the current ones with
+    list_smart_mailboxes first if you mean to keep some.
+
+    Mail.app must be quit, same as creation, and the file is backed up first.
+
+    Args:
+        mailbox_id: MailboxID from list_smart_mailboxes. Preferred: stable.
+        name: Exact current name. Used only when mailbox_id is absent.
+        new_name: New display name. Omit to keep the current one.
+        criteria: Full replacement criteria, same schema as create_smart_mailbox.
+            Omit to leave the criteria alone.
+        match_logic: 'all' or 'any'. Only read when criteria is provided.
+        omit_junk_trash_sent: Only read when criteria is provided.
+
+    Returns:
+        Dictionary with success status, the updated mailbox, and backup path.
+    """
+    try:
+        if not mailbox_id and not name:
+            return {
+                "success": False,
+                "error": "mailbox_id ou name est requis",
+                "error_type": "validation_error",
+            }
+        if new_name is None and criteria is None:
+            return {
+                "success": False,
+                "error": "Rien à modifier : fournir new_name et/ou criteria",
+                "error_type": "validation_error",
+            }
+
+        existing = read_smart_mailboxes()
+        entry, _, matches = find_mailbox(existing, mailbox_id=mailbox_id, name=name)
+
+        if entry is None:
+            return {
+                "success": False,
+                "error": f"Aucune boîte intelligente ne correspond à "
+                f"{mailbox_id or name!r}",
+                "error_type": "not_found",
+            }
+        if len(matches) > 1:
+            return {
+                "success": False,
+                "error": f"{len(matches)} boîtes portent le nom {name!r}. "
+                f"Passer mailbox_id pour lever l'ambiguïté.",
+                "error_type": "ambiguous",
+                "candidates": [describe_smart_mailbox(m) for m in matches],
+            }
+
+        if criteria is not None:
+            replace_criteria(
+                entry,
+                criteria,
+                match_logic=match_logic,
+                omit_junk_trash_sent=omit_junk_trash_sent,
+            )
+        if new_name is not None:
+            rename_mailbox(entry, new_name)
+
+        written = write_smart_mailboxes(existing)
+        operation_logger.log_operation(
+            "update_smart_mailbox",
+            {"id": entry.get("MailboxID"), "name": entry.get("MailboxName")},
+            "success",
+        )
+        return {
+            "success": True,
+            "smart_mailbox": describe_smart_mailbox(entry),
+            "backup": written["backup"],
+            "note": "Relancer Mail pour voir la modification.",
+        }
+    except Exception as e:
+        return _smart_mailbox_error("update_smart_mailbox", e)
 
 
 @_tool(
@@ -4006,12 +4113,11 @@ def delete_smart_mailbox(
             }
 
         existing = read_smart_mailboxes()
-        if mailbox_id:
-            matches = [b for b in existing if b.get("MailboxID") == mailbox_id]
-        else:
-            matches = [b for b in existing if b.get("MailboxName") == name]
+        removed, siblings, matches = find_mailbox(
+            existing, mailbox_id=mailbox_id, name=name
+        )
 
-        if not matches:
+        if removed is None:
             return {
                 "success": False,
                 "error": f"Aucune boîte intelligente ne correspond à "
@@ -4027,9 +4133,15 @@ def delete_smart_mailbox(
                 "candidates": [describe_smart_mailbox(b) for b in matches],
             }
 
-        removed = matches[0]
-        kept = [b for b in existing if b is not removed]
-        written = write_smart_mailboxes(kept)
+        # Removing a folder takes its children with it, which is what the
+        # sidebar shows and therefore what the user means. Say so in the answer
+        # rather than letting mailboxes vanish unmentioned.
+        orphaned = [
+            c.get("MailboxName") for c in (removed.get("MailboxChildren") or [])
+        ]
+
+        siblings.remove(removed)
+        written = write_smart_mailboxes(existing)
 
         operation_logger.log_operation(
             "delete_smart_mailbox",
@@ -4039,6 +4151,7 @@ def delete_smart_mailbox(
         return {
             "success": True,
             "removed": describe_smart_mailbox(removed),
+            "also_removed": orphaned,
             "backup": written["backup"],
             "total_smart_mailboxes": written["count"],
             "note": "Relancer Mail pour que la suppression soit visible.",
@@ -4060,7 +4173,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Start the server with only the 11 read-only tools registered "
-            "(skips the 22 mutating tools). Pair with a second non-read-only "
+            "(skips the 23 mutating tools). Pair with a second non-read-only "
             "server entry in your MCP client to batch-approve reads while "
             "still gating writes per call. See docs/reference/TOOLS.md."
         ),
@@ -4146,7 +4259,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if _READ_ONLY:
         logger.info(
-            "Read-only mode: 22 mutating tools skipped (--read-only). "
+            "Read-only mode: 23 mutating tools skipped (--read-only). "
             "Only the 12 read tools are registered."
         )
     logger.info("Starting Apple Mail MCP server")

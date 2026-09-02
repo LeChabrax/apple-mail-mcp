@@ -7,9 +7,9 @@ An MCP server that provides programmatic access to Apple Mail, enabling AI assis
 
 > ⚠️ **Pre-1.0 — expect breaking changes.** The MCP tool surface (tool names, parameters, return shapes) is still evolving as the project matures. Pin to a specific version (for example, `apple-mail-mcp==0.10.2`) and review the [CHANGELOG](CHANGELOG.md) before upgrading.
 
-## Tools (34)
+## Tools (35)
 
-Grouped by lifecycle (12 read-only, 22 mutating):
+Grouped by lifecycle (12 read-only, 23 mutating):
 
 - **Discovery** — `list_accounts`, `list_mailboxes`, `list_rules`, `list_smart_mailboxes`, `list_templates`: enumerate what's configured (no external cache — call per account).
 - **Read** — `search_messages`, `get_messages`, `get_thread`, `get_attachment_content`, `get_template`, `render_template`: read messages/threads, pull an attachment's content inline, and render templates.
@@ -20,7 +20,7 @@ Grouped by lifecycle (12 read-only, 22 mutating):
 - **IMAP fast path** — `imap_status`: per-account verdict on whether server-side search is actually live, plus the installed commit (read-only, no password). `setup_imap`: store and verify an account's IMAP password from the conversation, instead of the `setup-imap` CLI.
 - **Mailbox CRUD** — `create_mailbox`, `update_mailbox` (rename or move), `delete_mailbox`.
 - **Rules** — `create_rule`, `update_rule`, `delete_rule`.
-- **Smart mailboxes** — `create_smart_mailbox`, `delete_smart_mailbox`: a folder that filters mail *without moving it*, so the inbox keeps every message (a rule with `move_to` empties it, one with `copy_to` doubles the quota). No AppleScript surface exists, so these edit Mail's plist directly and require Mail to be quit; the mailbox appears at the next launch. When Mail is in iCloud, both the iCloud copy and the local mirror are written — writing only the local one is silently undone at the next launch.
+- **Smart mailboxes** — `create_smart_mailbox`, `update_smart_mailbox`, `delete_smart_mailbox`: a folder that filters mail *without moving it*, so the inbox keeps every message (a rule with `move_to` empties it, one with `copy_to` doubles the quota). No AppleScript surface exists, so these edit Mail's plist directly and require Mail to be quit; the mailbox appears at the next launch. When Mail is in iCloud, both the iCloud copy and the local mirror are written — writing only the local one is silently undone at the next launch.
 - **Templates (write)** — `save_template`, `delete_template`.
 
 Destructive operations (`delete_*`, `create_rule` with move/forward/delete actions, `create_draft` with `send_now=true`) prompt for confirmation via MCP elicitation. See [docs/reference/TOOLS.md](docs/reference/TOOLS.md) for full parameters and return shapes.

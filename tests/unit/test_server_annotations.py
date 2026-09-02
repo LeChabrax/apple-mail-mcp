@@ -52,6 +52,7 @@ DESTRUCTIVE_TOOLS: set[str] = {
     "delete_template",
     "delete_account",
     "delete_smart_mailbox",
+    "update_smart_mailbox",
 }
 
 ADDITIVE_TOOLS: set[str] = {
@@ -191,7 +192,7 @@ class TestProductionAnnotations:
         """No overlap between read-only and mutating sets; counts are 11 + 20."""
         assert READ_ONLY_TOOLS.isdisjoint(MUTATING_TOOLS)
         assert len(READ_ONLY_TOOLS) == 12
-        assert len(MUTATING_TOOLS) == 22
+        assert len(MUTATING_TOOLS) == 23
         assert DESTRUCTIVE_TOOLS.isdisjoint(ADDITIVE_TOOLS)
 
     @pytest.mark.parametrize("name", sorted(READ_ONLY_TOOLS))
