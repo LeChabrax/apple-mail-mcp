@@ -48,6 +48,11 @@ EXPECTED_TOOLS = {
     "create_rule",
     "update_rule",
     "delete_rule",
+    # Smart mailboxes: filter without moving, so the inbox keeps everything.
+    "list_smart_mailboxes",
+    "create_smart_mailbox",
+    "update_smart_mailbox",
+    "delete_smart_mailbox",
     # Templates (#30)
     "list_templates",
     "get_template",
