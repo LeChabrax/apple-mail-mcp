@@ -1626,3 +1626,73 @@ Deleting a smart mailbox never deletes mail: it removes a saved search, the
 messages stay where they were. Deleting a **folder** also removes the mailboxes
 inside it — their names come back in `also_removed` rather than disappearing
 unmentioned.
+
+---
+
+## Direct send (fork additions)
+
+`create_draft(send_now=True)` already sends, but forces a draft round-trip for
+a message the caller already has in full. These four send in one call. Each one
+**sends for real**: there is no second confirmation inside Mail.app, and no
+draft left behind to inspect. They prompt for confirmation via MCP elicitation
+(pass `confirmation` to answer it in-band).
+
+Recipient ids accept both forms returned by the read tools: a numeric Mail.app
+id or an RFC 5322 Message-ID.
+
+### send_email
+
+- `to` (list, required), `subject` (str, required), `body` (str).
+- `from_account` (str): sending account; defaults to Mail's own default.
+- `cc`, `bcc` (list), `attachment_paths` (list of absolute paths).
+
+### reply
+
+- `reply_to` (str, required): the message being answered.
+- `body` (str), `from_account`, `cc` (list).
+- `seed_mailbox` (str): where to look for the seed message, when the id alone
+  is ambiguous.
+- `send_now` (bool, default `true`): `false` leaves a draft instead of sending.
+
+Replies to the sender only.
+
+### reply_all
+
+Same arguments as `reply`, and answers **every** recipient of the original
+(To and Cc), not just its sender. That difference is the whole tool: worth
+being sure of before calling, since it sends immediately by default.
+
+### forward
+
+- `forward_of` (str, required), `to` (list, required).
+- `body` (str), `from_account`, `seed_mailbox`, `send_now` — as above.
+
+---
+
+## Accounts and diagnostics
+
+### imap_status
+
+No arguments, no password taken or returned. Reports, per account: host and
+port in use, whether a password is stored, and what a real connection attempt
+returns — plus the **installed commit**.
+
+Both halves matter. The AppleScript fallback is silent: when IMAP is missing,
+the connector answers anyway, in minutes rather than seconds, so a slow search
+looks like a big mailbox. And an MCP server started before an update keeps
+running the old code, which nothing else reveals.
+
+Call it before blaming performance on mailbox size, and after any update.
+
+### delete_account
+
+- `account` (str, required): display name or UUID (UUID is stable across
+  renames).
+
+Removes the account from Mail.app entirely. It does not delete mail on the
+server, but Mail's local copy goes with it.
+
+⚠️ Not reversible from here: **an account cannot be recreated over
+AppleScript** (see [the README](../../README.md#what-mailapp-will-not-let-this-server-do)
+— `make new imap account` returns an id that never persists). Re-adding it
+means doing so by hand in Mail's settings.

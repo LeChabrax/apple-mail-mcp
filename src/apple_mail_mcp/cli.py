@@ -147,6 +147,98 @@ def run_setup_imap_all(
     return 1 if echecs else 0
 
 
+def _uninstall_password(account_name: str, email: str) -> int:
+    """Remove the stored password and any login override. Exit code."""
+    try:
+        delete_imap_password(account_name, email)
+    except MailKeychainEntryNotFoundError:
+        print(
+            f"No Keychain entry to remove for {account_name!r} ({email}).",
+            file=sys.stderr,
+        )
+        return 1
+    except MailKeychainError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    # Also drop any persisted login override (#341) so a re-setup starts
+    # from Mail.app's derived login rather than a stale override.
+    delete_login_override(account_name)
+    print(f"Removed Keychain entry for {account_name!r} ({email}).")
+    return 0
+
+
+def _prompt_password(getpass_fn: Callable[[str], str] | None) -> str | None:
+    """Ask for the password. None means "give up", never an empty string.
+
+    Cancelling and typing nothing are different intents but the same outcome
+    here, so both collapse to None rather than to a falsy password that a
+    caller could mistake for a real one.
+    """
+    try:
+        password = (getpass_fn or getpass.getpass)("Enter app-specific password: ")
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled.", file=sys.stderr)
+        return None
+    if not password:
+        print("ERROR: empty password.", file=sys.stderr)
+        return None
+    return password
+
+
+def _store_password(account_name: str, email: str, password: str) -> int:
+    """Write the password to the Keychain. Exit code."""
+    try:
+        set_imap_password(account_name, email, password)
+    except MailKeychainError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print(f"Stored in Keychain as 'apple-mail-mcp.imap.{account_name}'.")
+    return 0
+
+
+def _negotiate_settings(
+    account_name: str,
+    host: str,
+    port: int,
+    email: str,
+    emails_declarees: list[str],
+    password: str,
+) -> tuple[str, int, str]:
+    """Find the settings that REALLY work, and persist what differs.
+
+    Mail.app declares a port that is sometimes absent (native Exchange account)
+    or wrong, and the expected LOGIN is not always the displayed address.
+    Trying them takes seconds; guessing them cost an evening on 2026-08-27.
+
+    Returns the settings to probe with — unchanged when nothing better was
+    found, so the caller keeps its own error reporting.
+    """
+    print(f"Recherche des parametres pour {host}...")
+    reglage, journal = negocier(
+        host, port, email, list(emails_declarees), password
+    )
+    for ligne in journal:
+        print(f"  {ligne}")
+    if reglage is None:
+        return host, port, email
+
+    if reglage.port != port:
+        set_port_override(account_name, reglage.port)
+        print(f"  port retenu : {reglage.port} ({reglage.origine_port})")
+    if reglage.login != email:
+        # Le mot de passe a ete ecrit sous l'ancienne cle : la deplacer,
+        # sinon la resolution a l'execution chercherait une entree absente.
+        try:
+            delete_imap_password(account_name, email)
+        except MailKeychainError:
+            pass
+        email = reglage.login
+        set_imap_password(account_name, email, password)
+        set_login_override(account_name, email)
+        print(f"  identifiant retenu : {email} ({reglage.origine_login})")
+    return reglage.host, reglage.port, email
+
+
 def run_setup_imap(
     *,
     account_name: str,
@@ -210,79 +302,64 @@ def run_setup_imap(
         return 1
 
     if uninstall:
-        try:
-            delete_imap_password(account_name, email)
-        except MailKeychainEntryNotFoundError:
-            print(
-                f"No Keychain entry to remove for {account_name!r} "
-                f"({email}).",
-                file=sys.stderr,
-            )
-            return 1
-        except MailKeychainError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            return 1
-        # Also drop any persisted login override (#341) so a re-setup starts
-        # from Mail.app's derived login rather than a stale override.
-        delete_login_override(account_name)
-        print(f"Removed Keychain entry for {account_name!r} ({email}).")
-        return 0
+        return _uninstall_password(account_name, email)
 
     print(
         f"Found Mail.app account {account_name!r} (email: {email})."
     )
 
-    prompt = "Enter app-specific password: "
-    try:
-        password = (getpass_fn or getpass.getpass)(prompt)
-    except (EOFError, KeyboardInterrupt):
-        print("\nCancelled.", file=sys.stderr)
-        return 1
-    if not password:
-        print("ERROR: empty password.", file=sys.stderr)
+    password = _prompt_password(getpass_fn)
+    if password is None:
         return 1
 
-    try:
-        set_imap_password(account_name, email, password)
-    except MailKeychainError as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+    if _store_password(account_name, email, password) != 0:
         return 1
-    print(
-        f"Stored in Keychain as 'apple-mail-mcp.imap.{account_name}'."
-    )
     # Persist an explicit --email as a login override so runtime resolution
     # (_resolve_imap_config) uses the same login this setup verifies — without
     # it, runtime re-derives the login from Mail.app and ignores --email (#341).
     if cli_email:
         set_login_override(account_name, email)
 
-    # Avant de sonder, chercher les parametres qui marchent VRAIMENT. Mail.app
-    # declare un port parfois absent (compte Exchange natif) ou faux, et le
-    # LOGIN attendu n'est pas toujours l'adresse affichee. Les essayer prend
-    # quelques secondes ; les deviner a coute une soiree le 2026-08-27.
-    print(f"Recherche des parametres pour {host}...")
-    reglage, journal = negocier(
-        host, port, email, list(emails_declarees), password
+    host, port, email = _negotiate_settings(
+        account_name, host, port, email, emails_declarees, password
     )
-    for ligne in journal:
-        print(f"  {ligne}")
-    if reglage is not None:
-        if reglage.port != port:
-            set_port_override(account_name, reglage.port)
-            print(f"  port retenu : {reglage.port} ({reglage.origine_port})")
-        if reglage.login != email:
-            # Le mot de passe a ete ecrit sous l'ancienne cle : la deplacer,
-            # sinon la resolution a l'execution chercherait une entree absente.
-            try:
-                delete_imap_password(account_name, email)
-            except MailKeychainError:
-                pass
-            email = reglage.login
-            set_imap_password(account_name, email, password)
-            set_login_override(account_name, email)
-            print(f"  identifiant retenu : {email} ({reglage.origine_login})")
-        host, port = reglage.host, reglage.port
 
+    return _verify_connection(
+        account_name, host, port, email, password, cli_email, imap_factory
+    )
+
+
+def _rollback_entry(account_name: str, email: str, cli_email: str | None) -> None:
+    """Undo what setup just wrote, so a retry starts from a clean slate.
+
+    Leaving a bad entry behind is worse than having none: get_imap_password
+    would return it happily, and every later failure would point somewhere
+    else.
+    """
+    try:
+        delete_imap_password(account_name, email)
+    except MailKeychainError:
+        pass
+    if cli_email:
+        delete_login_override(account_name)
+
+
+def _verify_connection(
+    account_name: str,
+    host: str,
+    port: int,
+    email: str,
+    password: str,
+    cli_email: str | None,
+    imap_factory: Callable[[str, int, str, str], ImapConnector] | None,
+) -> int:
+    """Probe the server with the credentials just stored. Exit code.
+
+    Three outcomes, deliberately distinct: rejected (roll back, the password is
+    wrong), crashed before the wire (roll back, we wrote an entry nobody asked
+    for), or unreachable (KEEP the entry and warn — the password may well be
+    fine and a network hiccup must not delete the user's work).
+    """
     print(f"Testing IMAP connection to {host}:{port}...")
     imap = (imap_factory or ImapConnector)(host, port, email, password)
     try:
@@ -297,12 +374,7 @@ def run_setup_imap(
         # Bad password — roll the entry back so the user can retry without
         # leaving a broken Keychain item that get_imap_password would
         # happily return. Mirror the rollback for any override just written.
-        try:
-            delete_imap_password(account_name, email)
-        except MailKeychainError:
-            pass
-        if cli_email:
-            delete_login_override(account_name)
+        _rollback_entry(account_name, email, cli_email)
         print(
             f"ERROR: IMAP login was rejected ({exc}). The Keychain entry "
             "has been removed; please re-run with the correct password.",
@@ -319,12 +391,7 @@ def run_setup_imap(
         # entry only for the transport errors we understand; roll back the
         # rest so a retry starts clean.
         if not isinstance(exc, (OSError, IMAPClientError)):
-            try:
-                delete_imap_password(account_name, email)
-            except MailKeychainError:
-                pass
-            if cli_email:
-                delete_login_override(account_name)
+            _rollback_entry(account_name, email, cli_email)
             print(
                 f"ERROR: IMAP verification crashed ({type(exc).__name__}: "
                 f"{exc}). The Keychain entry has been removed.",

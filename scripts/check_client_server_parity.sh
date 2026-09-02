@@ -10,8 +10,12 @@ SERVER="src/apple_mail_mcp/server.py"
 
 echo "Checking client-server parity..."
 
-# Extract public methods from connector (exclude __init__, _private)
-CONNECTOR_METHODS=$(grep -E '^\s+def [a-z]' "$CONNECTOR" | grep -v '^\s+def _' | sed 's/.*def \([a-z_]*\)(.*/\1/' | sort)
+# Extract public methods from connector (exclude __init__, _private).
+# Exactly four spaces of indentation: that is a method on the class. A closure
+# defined inside a method is indented deeper, and is not part of any public
+# surface — matching `^\s+def` swept those in too, which reported a nested
+# helper (`replier`, inside resolve_inbox_name) as an unexposed public method.
+CONNECTOR_METHODS=$(grep -E '^    def [a-z]' "$CONNECTOR" | grep -v '^    def _' | sed 's/.*def \([a-z_]*\)(.*/\1/' | sort)
 
 # Extract decorated tool functions from server. Matches both the bare
 # @mcp.tool() decorator (legacy) and the @_tool(...) helper that wraps it
@@ -52,6 +56,7 @@ ALLOWLIST = {
     "find_message_by_message_id": "Internal RFC-id->Mail-id lookup (e.g. update_draft seed recovery).",
     "extract_draft_attachments": "Helper for update_draft delete-and-recreate attachment preservation.",
     "auto_template_vars": "Auto-fills template variables; used by the template/draft path, not standalone.",
+    "resolve_inbox_name": "Resolves the real receiving-mailbox name of an account; every read tool calls it to default `mailbox`, it is not a user-facing operation.",
 }
 
 missing = {line.strip() for line in sys.stdin if line.strip()}

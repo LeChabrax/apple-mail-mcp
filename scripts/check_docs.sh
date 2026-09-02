@@ -50,7 +50,11 @@ for header in sorted(documented_headers - live):
 # --- (b) removed-tool names presented as current tools ---------------------
 # Scope: user-facing docs only (exclude CHANGELOG + historical plans/research).
 REMOVED = [
-    "send_email", "send_email_with_attachments",
+    # `send_email` was on this list and must NOT be: upstream removed it, this
+    # fork brought it back as a real registered tool (server.py, and the e2e
+    # tool registry). Leaving it here made the gate reject documenting a tool
+    # that ships — the docs were right and the checker was stale.
+    "send_email_with_attachments",
     "reply_to_message", "forward_message", "get_message",
 ]
 SKIP = re.compile(r"removed|replaced|renamed|docs-allow", re.IGNORECASE)
