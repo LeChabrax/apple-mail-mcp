@@ -379,6 +379,13 @@ def _bracket_message_id(message_id: str) -> str:
     site can build a bracketed id without the CRLF-injection guard.
     """
     _reject_control_chars(message_id, "message_id")
+    # Strip surrounding whitespace before the bracket test. Measured
+    # 2026-09-03: search_messages can hand back ' <PH0PR...outlook.com>',
+    # leading space included, straight from the raw header. Untrimmed, the
+    # startswith("<") check fails and this returns '< <PH0PR...>>' — double
+    # brackets, matching nothing. One invisible character, and an existing
+    # message reads as absent.
+    message_id = message_id.strip()
     if message_id.startswith("<") and message_id.endswith(">"):
         return message_id
     return f"<{message_id}>"

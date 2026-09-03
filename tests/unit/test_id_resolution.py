@@ -24,13 +24,16 @@ def srv():
 
 class TestRfcIdFallback:
     def test_rfc_id_is_resolved_and_read(self, srv):
-        """The bug in one test: an RFC id must not read as a missing message."""
+        """The bug in one test: an RFC id must not read as a missing message.
+
+        No account here, so IMAP cannot be addressed and the AppleScript
+        resolution runs — the path that still has to work on an unconfigured
+        machine.
+        """
         message = {"id": "269502", "subject": "Invitation"}
         mail = MagicMock()
-        mail.get_message.side_effect = [
-            MailMessageNotFoundError("not found (-2700)"),
-            message,
-        ]
+        mail.list_accounts.return_value = []
+        mail.get_message.return_value = message
         mail.find_message_by_message_id.return_value = "269502"
 
         with patch.object(srv, "mail", mail):
@@ -116,16 +119,106 @@ class TestRfcIdFallback:
         assert out == [] and missing == ["ghost@nowhere.com"]
 
 
+class TestImapIsPreferred:
+    """Reading over IMAP instead of driving Mail message by message.
+
+    Measured on a real machine (11 accounts, 270 mailboxes): the AppleScript
+    resolution costs 27.8 s for ONE targeted mailbox and times out at 60 s over
+    the whole set, while the IMAP read of the same message takes 1.0 s. Same
+    three ids end to end: 236.8 s and nothing read, against 3.2 s and all three.
+    """
+
+    def test_rfc_id_skips_the_doomed_applescript_lookup(self, srv):
+        """A lookup that cannot match must not be paid for."""
+        mail = MagicMock()
+        mail.get_message.return_value = {"id": "269502"}
+
+        with patch.object(srv, "mail", mail):
+            out, missing = srv._resolve_id_list_to_messages(
+                ["calendar-abc@google.com"],
+                include_content=True,
+                account="LMP",
+                mailbox="INBOX",
+            )
+
+        assert [m["id"] for m in out] == ["269502"] and missing == []
+        # One call, straight to IMAP — not a failed pass then a retry.
+        assert mail.get_message.call_count == 1
+        assert mail.get_message.call_args.kwargs["account"] == "LMP"
+
+    def test_numeric_id_still_uses_the_direct_path(self, srv):
+        """Mail's own ids resolve there; sending them to IMAP would be wrong."""
+        mail = MagicMock()
+        mail.get_message.return_value = {"id": "269502"}
+
+        with patch.object(srv, "mail", mail):
+            srv._resolve_id_list_to_messages(
+                ["269502"], include_content=True, account="LMP", mailbox="INBOX"
+            )
+
+        mail.find_message_by_message_id.assert_not_called()
+
+    def test_inbox_assumed_when_no_mailbox_given(self, srv):
+        mail = MagicMock()
+        mail.get_message.return_value = {"id": "1"}
+
+        with patch.object(srv, "mail", mail):
+            srv._resolve_id_list_to_messages(
+                ["x@y.com"], include_content=True, account="LMP", mailbox=None
+            )
+
+        assert mail.get_message.call_args.kwargs["mailbox"] == "INBOX"
+
+    def test_named_account_is_tried_alone(self, srv):
+        assert srv._accounts_to_try("LMP") == ["LMP"]
+
+    def test_candidate_accounts_are_computed_once(self, srv):
+        """Probing every keychain entry costs 28.9 s; it must not repeat."""
+        mail = MagicMock()
+        mail.list_accounts.return_value = [{"name": "LMP"}, {"name": "Other"}]
+
+        with patch.object(srv, "mail", mail), patch.object(
+            srv, "_IMAP_ACCOUNTS_CACHE", None
+        ), patch(
+            "apple_mail_mcp.remediation.fast_path_is_live", return_value=True
+        ):
+            srv._accounts_to_try(None)
+            srv._accounts_to_try(None)
+            srv._accounts_to_try(None)
+
+        assert mail.list_accounts.call_count == 1
+
+    def test_recent_account_is_tried_first(self, srv):
+        """Each miss is a full IMAP round-trip, so order decides the cost."""
+        mail = MagicMock()
+        mail.list_accounts.return_value = [{"name": "Other"}, {"name": "LMP"}]
+
+        with patch.object(srv, "mail", mail), patch.object(
+            srv, "_IMAP_ACCOUNTS_CACHE", None
+        ), patch.object(srv, "_ACCOUNT_MRU", []), patch(
+            "apple_mail_mcp.remediation.fast_path_is_live", return_value=True
+        ):
+            srv._remember_account("LMP")
+            assert srv._accounts_to_try(None)[0] == "LMP"
+
+    def test_account_memory_is_bounded(self, srv):
+        with patch.object(srv, "_ACCOUNT_MRU", []):
+            for i in range(20):
+                srv._remember_account(f"acct{i}")
+            assert len(srv._ACCOUNT_MRU) <= 8
+            assert srv._ACCOUNT_MRU[-1] == "acct19"
+
+
 class TestAttachmentDegradation:
     def test_attachment_failure_still_returns_the_message(self, srv):
         """Separate bug, measured on one real message: include_attachments=True
         raises "not found" where False returns it. The body is what was asked
         for; reporting an existing message as missing is the worse answer."""
         mail = MagicMock()
+        mail.list_accounts.return_value = []
         mail.get_message.side_effect = [
-            MailMessageNotFoundError("not found"),   # direct lookup
-            MailMessageNotFoundError("not found"),   # retry, with attachments
-            {"id": "269502", "subject": "OK"},        # retry, without
+            MailMessageNotFoundError("not found"),   # with attachments
+            {"id": "269502", "subject": "OK"},        # without
         ]
         mail.find_message_by_message_id.return_value = "269502"
 
@@ -140,11 +233,12 @@ class TestAttachmentDegradation:
 
         assert [m["id"] for m in out] == ["269502"]
         assert missing == []
-        assert mail.get_message.call_args_list[2].kwargs["include_attachments"] is False
+        assert mail.get_message.call_args_list[-1].kwargs["include_attachments"] is False
 
     def test_no_second_attempt_when_attachments_were_not_asked_for(self, srv):
         """Without attachments there is nothing to degrade: fail honestly."""
         mail = MagicMock()
+        mail.list_accounts.return_value = []
         mail.get_message.side_effect = MailMessageNotFoundError("not found")
         mail.find_message_by_message_id.return_value = "269502"
 
@@ -158,7 +252,7 @@ class TestAttachmentDegradation:
             )
 
         assert out == [] and missing == ["x@y.com"]
-        assert mail.get_message.call_count == 2
+        assert mail.get_message.call_count == 1
 
 
 class TestPartialResultsAreNamed:

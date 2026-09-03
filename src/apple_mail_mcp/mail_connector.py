@@ -980,7 +980,16 @@ class AppleMailConnector:
                 # Parse error and raise appropriate exception
                 if "Can't get account" in normalized:
                     raise MailAccountNotFoundError(error_msg)
-                elif "Can't get mailbox" in normalized:
+                # Two spellings, one meaning. "Can't get mailbox" comes from
+                # Mail itself; "mailbox not found:" is raised by our own
+                # AppleScript when a mailbox-path walk fails. Only the first
+                # was matched, so our own error fell through to
+                # MailAppleScriptError and a caller could not tell a wrong
+                # mailbox name from a broken tool.
+                elif (
+                    "Can't get mailbox" in normalized
+                    or "mailbox not found:" in normalized
+                ):
                     raise MailMailboxNotFoundError(error_msg)
                 elif "Can't get message" in normalized:
                     raise MailMessageNotFoundError(error_msg)

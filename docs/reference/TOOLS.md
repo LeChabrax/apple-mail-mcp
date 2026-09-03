@@ -440,6 +440,18 @@ the ids that dropped now come back in **`unreadable_ids`**, with a `note`
 saying how many of how many failed. Silence there is what turned an id-format
 mismatch into a phantom missing message.
 
+An RFC id is read **over IMAP**, not by driving Mail.app. Measured 2026-09-03
+on a machine with 11 accounts and 270 mailboxes: the AppleScript resolution
+costs 27.8 s for a single targeted mailbox and times out at 60 s across the
+set, while the IMAP read of the same message takes 1.0 s. Same three ids end to
+end: **236.8 s and nothing read, against 3.2 s and all three**.
+
+When `account` is omitted the accounts with a stored IMAP password are tried,
+most-recently-used first — a caller has no way to guess that an optional
+argument decides between three seconds and four minutes, so it is not left to
+them. Passing `account` (and `mailbox`) is still markedly faster: one attempt
+instead of several.
+
 One degradation worth knowing: when a read fails *only* because attachment
 metadata could not be fetched, the message is returned without it rather than
 reported missing. The body is what the caller asked for.
@@ -549,6 +561,18 @@ Partial results remain the rule: one unreadable id does not sink a batch. But
 the ids that dropped now come back in **`unreadable_ids`**, with a `note`
 saying how many of how many failed. Silence there is what turned an id-format
 mismatch into a phantom missing message.
+
+An RFC id is read **over IMAP**, not by driving Mail.app. Measured 2026-09-03
+on a machine with 11 accounts and 270 mailboxes: the AppleScript resolution
+costs 27.8 s for a single targeted mailbox and times out at 60 s across the
+set, while the IMAP read of the same message takes 1.0 s. Same three ids end to
+end: **236.8 s and nothing read, against 3.2 s and all three**.
+
+When `account` is omitted the accounts with a stored IMAP password are tried,
+most-recently-used first — a caller has no way to guess that an optional
+argument decides between three seconds and four minutes, so it is not left to
+them. Passing `account` (and `mailbox`) is still markedly faster: one attempt
+instead of several.
 
 One degradation worth knowing: when a read fails *only* because attachment
 metadata could not be fetched, the message is returned without it rather than
