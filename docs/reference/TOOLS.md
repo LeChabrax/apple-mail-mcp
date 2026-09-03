@@ -423,6 +423,27 @@ update_message(
 ---
 
 
+## Reading what search returned
+
+`search_messages` returns an RFC 5322 Message-ID on its IMAP path; the
+AppleScript read path wants Mail's internal numeric id. So `get_messages` and
+`search_messages(source=[...])` retry an unmatched id once as an RFC
+Message-ID, stripping angle brackets and stray whitespace first (measured: the
+id can arrive as `' <PR3P...OUTLOOK.COM>'`, header-verbatim).
+
+Without it, the most natural two-call sequence — search, then read — returned
+`success: true, count: 0`. Nothing errored, so the only available conclusion
+was that the message did not exist.
+
+Partial results remain the rule: one unreadable id does not sink a batch. But
+the ids that dropped now come back in **`unreadable_ids`**, with a `note`
+saying how many of how many failed. Silence there is what turned an id-format
+mismatch into a phantom missing message.
+
+One degradation worth knowing: when a read fails *only* because attachment
+metadata could not be fetched, the message is returned without it rather than
+reported missing. The body is what the caller asked for.
+
 ## Error Handling: the `remediation` field
 
 Some failures have a known fix. When a read tool fails in the shape a **missing
@@ -512,7 +533,28 @@ all_messages = search_messages(account="Gmail", limit=10000)
 # ... filter in Python
 ```
 
-### Error Handling: the `remediation` field
+### Reading what search returned
+
+`search_messages` returns an RFC 5322 Message-ID on its IMAP path; the
+AppleScript read path wants Mail's internal numeric id. So `get_messages` and
+`search_messages(source=[...])` retry an unmatched id once as an RFC
+Message-ID, stripping angle brackets and stray whitespace first (measured: the
+id can arrive as `' <PR3P...OUTLOOK.COM>'`, header-verbatim).
+
+Without it, the most natural two-call sequence — search, then read — returned
+`success: true, count: 0`. Nothing errored, so the only available conclusion
+was that the message did not exist.
+
+Partial results remain the rule: one unreadable id does not sink a batch. But
+the ids that dropped now come back in **`unreadable_ids`**, with a `note`
+saying how many of how many failed. Silence there is what turned an id-format
+mismatch into a phantom missing message.
+
+One degradation worth knowing: when a read fails *only* because attachment
+metadata could not be fetched, the message is returned without it rather than
+reported missing. The body is what the caller asked for.
+
+## Error Handling: the `remediation` field
 
 Some failures have a known fix. When a read tool fails in the shape a **missing
 IMAP fast path** produces (Mail error `-10000`, or a timeout) on an account with

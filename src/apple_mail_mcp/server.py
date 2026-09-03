@@ -1106,9 +1106,15 @@ def _resolve_id_list_to_messages(
 
     ``SELECTED`` tokens expand inline to Mail.app's current UI selection
     (zero-or-more messages). Real ids are looked up via
-    ``mail.get_message()``. Missing ids drop out silently
-    (partial-results convention). The connector ``get_selected_messages``
-    is called at most once even if ``SELECTED`` appears multiple times.
+    ``mail.get_message()``, retrying once as an RFC 5322 Message-ID before
+    giving up. The connector ``get_selected_messages`` is called at most once
+    even if ``SELECTED`` appears multiple times.
+
+    Returns ``(messages, missing_ids)``. Partial results are still the
+    convention — one unreadable id must not sink a batch of twenty — but the
+    ids that dropped come back so the caller can SAY so. Returning only the
+    survivors is what turned an id-format mismatch into "this message does not
+    exist".
 
     Used by both ``search_messages.source`` (metadata mode,
     ``include_content=False``) and ``get_messages.message_ids`` (bodies
@@ -1117,6 +1123,7 @@ def _resolve_id_list_to_messages(
     """
     selected_resolved: list[dict[str, Any]] | None = None
     out: list[dict[str, Any]] = []
+    missing: list[str] = []
     for id_or_token in ids:
         if id_or_token == _SELECTED_SENTINEL:
             if selected_resolved is None:
@@ -1137,9 +1144,87 @@ def _resolve_id_list_to_messages(
                 )
                 out.append(msg)
             except MailMessageNotFoundError:
-                # Partial-results: missing ids drop out silently.
-                continue
-    return _annotate_injection(_bound_message_bodies(out))
+                # Second chance: the id may be an RFC 5322 Message-ID.
+                #
+                # search_messages returns RFC ids on its IMAP path, while the
+                # AppleScript lookup here wants Mail's internal numeric id —
+                # so the most natural sequence a caller can write, search then
+                # read, failed. Measured 2026-09-03: search_messages returned
+                # `calendar-...@google.com`, get_messages answered
+                # `success: true, count: 0`. Nothing errored; the caller could
+                # only conclude the message did not exist.
+                resolved = _retry_as_rfc_id(
+                    id_or_token,
+                    include_content=include_content,
+                    headers_only=headers_only,
+                    include_attachments=include_attachments,
+                )
+                if resolved is not None:
+                    out.append(resolved)
+                else:
+                    missing.append(id_or_token)
+    return _annotate_injection(_bound_message_bodies(out)), missing
+
+
+def _retry_as_rfc_id(
+    candidate: str,
+    *,
+    include_content: bool,
+    headers_only: bool,
+    include_attachments: bool,
+) -> dict[str, Any] | None:
+    """Read a message whose id turned out to be an RFC 5322 Message-ID.
+
+    Only reached after a direct lookup already failed, so the extra
+    AppleScript pass costs nothing on the normal path.
+    """
+    if "@" not in candidate:
+        # Mail's internal ids are numeric; without an at-sign this cannot be
+        # an RFC Message-ID, and translating it would be a wasted scan.
+        return None
+    # Measured 2026-09-03: search_messages can return ' <PR3P...OUTLOOK.COM>',
+    # leading space and angle brackets included, straight from the raw header.
+    # Looked up verbatim it matches nothing, so the id is normalised here
+    # rather than blamed on the message.
+    candidate = candidate.strip().strip("<>").strip()
+    try:
+        internal_id = mail.find_message_by_message_id(candidate)
+        if internal_id is None:
+            return None
+        # Read WITHOUT the account/mailbox hints on purpose, measured
+        # 2026-09-03: passing them re-enables the IMAP path, which matches on
+        # the RFC Message-ID header — and we now hold Mail's numeric id, which
+        # that path cannot find. The hints made this fallback fail every time
+        # while working fine without them.
+        try:
+            return mail.get_message(
+                internal_id,
+                include_content=include_content,
+                headers_only=headers_only,
+                include_attachments=include_attachments,
+            )
+        except MailMessageNotFoundError:
+            if not include_attachments:
+                raise
+            # SEPARATE BUG, measured on the same message, same id:
+            # include_attachments=True raises "not found" where False returns
+            # the message. Attachment metadata is a bonus here; the body is
+            # what the caller asked for. Returning it without attachments beats
+            # reporting a message that plainly exists as missing.
+            logger.debug(
+                "Attachment metadata unavailable for %s; returning the message "
+                "without it.",
+                internal_id,
+            )
+            return mail.get_message(
+                internal_id,
+                include_content=include_content,
+                headers_only=headers_only,
+                include_attachments=False,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("RFC id fallback failed for %s: %s", candidate, exc)
+        return None
 
 
 def _max_body_bytes() -> int:
@@ -1370,7 +1455,7 @@ def search_messages(
             # post-filter can match content. Force include_content=True for
             # the per-id fetch when these filters are set.
             need_body = bool(body_contains or text_contains)
-            resolved = _resolve_id_list_to_messages(
+            resolved, _unreadable = _resolve_id_list_to_messages(
                 source,
                 include_content=need_body,
                 account=account,
@@ -1602,7 +1687,7 @@ def get_messages(
         logger.info(f"Getting messages: {len(message_ids)} ids")
 
         read_started_at = time.perf_counter()
-        messages = _resolve_id_list_to_messages(
+        messages, unreadable_ids = _resolve_id_list_to_messages(
             message_ids,
             include_content=include_content,
             account=account,
@@ -1617,14 +1702,26 @@ def get_messages(
             "success"
         )
 
+        response: dict[str, Any] = {
+            "success": True,
+            "messages": messages,
+            "count": len(messages),
+        }
+        # Name what could not be read. Silence here is how an id-format
+        # mismatch became "this message does not exist": count 0, no error,
+        # nothing to act on.
+        if unreadable_ids:
+            response["unreadable_ids"] = unreadable_ids
+            response["note"] = (
+                f"{len(unreadable_ids)} identifiant(s) sur "
+                f"{len(message_ids)} n'ont pas pu être lus. Les messages "
+                f"rendus sont complets ; ceux-là manquent."
+            )
+
         # Reading bodies message by message is the slow path's other half:
         # it succeeds, slowly, and the caller has no way to know why.
         return with_slow_path_remediation(
-            {
-                "success": True,
-                "messages": messages,
-                "count": len(messages),
-            },
+            response,
             time.perf_counter() - read_started_at,
             connector=mail,
             account=account,
