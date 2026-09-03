@@ -50,6 +50,31 @@ def test_account() -> str:
     return os.getenv("MAIL_TEST_ACCOUNT", "Gmail")
 
 
+def server_folder_name(client, requested: str) -> str:
+    """The name the SERVER gave a mailbox we asked Mail.app to create.
+
+    Not every server stores a mailbox under the name it was asked for. Measured
+    2026-09-03 on OVH: `create_mailbox(name="ZZZ-AMM-PROBE")` produced
+    `INBOX.ZZZ-AMM-PROBE`, because personal mailboxes live under an `INBOX.`
+    namespace there. Gmail and iCloud use an empty prefix, so tests written
+    against them hardcoded the bare name and every APPEND/MOVE in this file
+    addressed a mailbox that did not exist — the delete round-trip reported
+    "0 deleted" and looked like a broken connector.
+
+    Resolving through LIST asks the server instead of assuming. Falls back to
+    the requested name so a failure to find it surfaces as the test's own
+    assertion, not as a confusing lookup error here.
+    """
+    for _flags, _delim, name in client.list_folders():
+        if isinstance(name, (bytes, bytearray)):
+            name = name.decode("utf-8", errors="replace")
+        if name == requested or name.endswith(f".{requested}") or name.endswith(
+            f"/{requested}"
+        ):
+            return name
+    return requested
+
+
 class TestMailIntegration:
     """Integration tests with real Apple Mail."""
 
@@ -537,12 +562,11 @@ class TestMailIntegration:
         from email.message import EmailMessage
         from email.utils import format_datetime
 
-        from imapclient import IMAPClient
-
         from apple_mail_mcp.exceptions import (
             MailKeychainAccessDeniedError,
             MailKeychainEntryNotFoundError,
         )
+        from apple_mail_mcp.imap_connector import _connect_imap
         from apple_mail_mcp.keychain import get_imap_password
 
         host, port, email = connector._resolve_imap_config(test_account)
@@ -571,7 +595,7 @@ class TestMailIntegration:
                 payload, maintype="application", subtype="pdf", filename="doc.pdf"
             )
 
-            ac = IMAPClient(host, port=port, ssl=True, timeout=30)
+            ac = _connect_imap(host, port, 30)
             ac.login(email, pw)
             try:
                 ac.append(box, m.as_bytes())
@@ -875,13 +899,12 @@ class TestDraftsLifecycleIntegration:
         """APPEND a raw RFC 822 message to ``mailbox`` over IMAP (helper for
         the #293 reply/forward clean-path tests). Caller creates the
         mailbox and handles cleanup."""
-        from imapclient import IMAPClient
-
+        from apple_mail_mcp.imap_connector import _connect_imap
         from apple_mail_mcp.keychain import get_imap_password
 
         host, port, email = connector._resolve_imap_config(test_account)
         pw = get_imap_password(test_account, email)
-        client = IMAPClient(host, port=port, ssl=True, timeout=30)
+        client = _connect_imap(host, port, 30)
         client.login(email, pw)
         try:
             client.append(mailbox, raw, flags=[])
@@ -1232,8 +1255,7 @@ class TestDraftsLifecycleIntegration:
         is on the server."""
         import uuid as _uuid
 
-        from imapclient import IMAPClient
-
+        from apple_mail_mcp.imap_connector import _connect_imap
         from apple_mail_mcp.keychain import get_imap_password
 
         fixture = f"ZZZ-AMM-DEL-INT-{_uuid.uuid4().hex[:8]}"
@@ -1257,7 +1279,7 @@ class TestDraftsLifecycleIntegration:
         # Verify via direct IMAP — Mail.app's view lags
         host, port, email = connector._resolve_imap_config(test_account)
         pw = get_imap_password(test_account, email)
-        client = IMAPClient(host, port=port, ssl=True, timeout=30)
+        client = _connect_imap(host, port, 30)
         client.login(email, pw)
         try:
             folders = {f[2] for f in client.list_folders()}
@@ -1277,8 +1299,7 @@ class TestDraftsLifecycleIntegration:
         from datetime import datetime, timezone
         from email.utils import format_datetime
 
-        from imapclient import IMAPClient
-
+        from apple_mail_mcp.imap_connector import _connect_imap
         from apple_mail_mcp.keychain import get_imap_password
 
         suffix = _uuid.uuid4().hex[:8]
@@ -1307,10 +1328,14 @@ class TestDraftsLifecycleIntegration:
                 f"body\r\n"
             ).encode()
 
-            append_client = IMAPClient(host, port=port, ssl=True, timeout=30)
+            append_client = _connect_imap(host, port, 30)
             append_client.login(email, pw)
             try:
-                append_client.append(src, raw)
+                # Two names for one mailbox: Mail.app knows it as `src`, the
+                # server may store it under a namespace prefix. Direct IMAP
+                # calls need the server name, the connector needs Mail's.
+                src_imap = server_folder_name(append_client, src)
+                append_client.append(src_imap, raw)
             finally:
                 append_client.logout()
 
@@ -1324,10 +1349,10 @@ class TestDraftsLifecycleIntegration:
             assert moved == 1
 
             # Verify via direct IMAP — Mail.app's local view lags.
-            verify = IMAPClient(host, port=port, ssl=True, timeout=30)
+            verify = _connect_imap(host, port, 30)
             verify.login(email, pw)
             try:
-                verify.select_folder(src, readonly=True)
+                verify.select_folder(src_imap, readonly=True)
                 src_uids = verify.search(["HEADER", "Message-ID", bracketed])
                 verify.select_folder(dst, readonly=True)
                 dst_uids = verify.search(["HEADER", "Message-ID", bracketed])
@@ -1363,8 +1388,7 @@ class TestDraftsLifecycleIntegration:
         from datetime import datetime, timezone
         from email.utils import format_datetime
 
-        from imapclient import IMAPClient
-
+        from apple_mail_mcp.imap_connector import _connect_imap
         from apple_mail_mcp.keychain import get_imap_password
 
         host, port, email = connector._resolve_imap_config(test_account)
@@ -1393,10 +1417,14 @@ class TestDraftsLifecycleIntegration:
                 f"body\r\n"
             ).encode()
 
-            append_client = IMAPClient(host, port=port, ssl=True, timeout=30)
+            append_client = _connect_imap(host, port, 30)
             append_client.login(email, pw)
             try:
-                append_client.append(src, raw)
+                # Two names for one mailbox: Mail.app knows it as `src`, the
+                # server may store it under a namespace prefix. Direct IMAP
+                # calls need the server name, the connector needs Mail's.
+                src_imap = server_folder_name(append_client, src)
+                append_client.append(src_imap, raw)
             finally:
                 append_client.logout()
 
@@ -1408,7 +1436,7 @@ class TestDraftsLifecycleIntegration:
             )
             assert moved == 1
 
-            verify = IMAPClient(host, port=port, ssl=True, timeout=30)
+            verify = _connect_imap(host, port, 30)
             verify.login(email, pw)
             try:
                 # Discover Trash via SPECIAL-USE, fall back to the Gmail name.
@@ -1419,7 +1447,7 @@ class TestDraftsLifecycleIntegration:
                         break
                 trash = trash or "[Gmail]/Trash"
 
-                verify.select_folder(src, readonly=True)
+                verify.select_folder(src_imap, readonly=True)
                 src_uids = verify.search(["HEADER", "Message-ID", bracketed])
                 verify.select_folder(dst, readonly=True)
                 dst_uids = verify.search(["HEADER", "Message-ID", bracketed])
@@ -1457,8 +1485,7 @@ class TestDraftsLifecycleIntegration:
         from datetime import datetime, timezone
         from email.utils import format_datetime
 
-        from imapclient import IMAPClient
-
+        from apple_mail_mcp.imap_connector import _connect_imap
         from apple_mail_mcp.keychain import get_imap_password
 
         suffix = _uuid.uuid4().hex[:8]
@@ -1485,10 +1512,14 @@ class TestDraftsLifecycleIntegration:
                 f"body\r\n"
             ).encode()
 
-            append_client = IMAPClient(host, port=port, ssl=True, timeout=30)
+            append_client = _connect_imap(host, port, 30)
             append_client.login(email, pw)
             try:
-                append_client.append(src, raw)
+                # Two names for one mailbox: Mail.app knows it as `src`, the
+                # server may store it under a namespace prefix. Direct IMAP
+                # calls need the server name, the connector needs Mail's.
+                src_imap = server_folder_name(append_client, src)
+                append_client.append(src_imap, raw)
             finally:
                 append_client.logout()
 
@@ -1503,7 +1534,7 @@ class TestDraftsLifecycleIntegration:
             # Verify via direct IMAP. Discover the Trash folder the same
             # way the connector did (SPECIAL-USE first, conventional
             # fallback) so this test works on Gmail / iCloud / Fastmail.
-            verify = IMAPClient(host, port=port, ssl=True, timeout=30)
+            verify = _connect_imap(host, port, 30)
             verify.login(email, pw)
             try:
                 trash_name = None
@@ -1534,7 +1565,7 @@ class TestDraftsLifecycleIntegration:
                     "Test account has no discoverable Trash folder"
                 )
 
-                verify.select_folder(src, readonly=True)
+                verify.select_folder(src_imap, readonly=True)
                 src_uids = verify.search(["HEADER", "Message-ID", bracketed])
                 verify.select_folder(trash_name, readonly=True)
                 trash_uids = verify.search(["HEADER", "Message-ID", bracketed])
@@ -1573,8 +1604,7 @@ class TestDraftsLifecycleIntegration:
         from datetime import datetime, timezone
         from email.utils import format_datetime
 
-        from imapclient import IMAPClient
-
+        from apple_mail_mcp.imap_connector import _connect_imap
         from apple_mail_mcp.keychain import get_imap_password
 
         suffix = _uuid.uuid4().hex[:8]
@@ -1601,11 +1631,13 @@ class TestDraftsLifecycleIntegration:
                 f"body\r\n"
             ).encode()
 
-            append_client = IMAPClient(host, port=port, ssl=True, timeout=30)
+            append_client = _connect_imap(host, port, 30)
             append_client.login(email, pw)
             try:
+                # Two names for one mailbox: see server_folder_name.
+                src_imap = server_folder_name(append_client, src)
                 # flags=[] explicitly: ensure no \Seen at start.
-                append_client.append(src, raw, flags=[])
+                append_client.append(src_imap, raw, flags=[])
             finally:
                 append_client.logout()
 
@@ -1619,10 +1651,10 @@ class TestDraftsLifecycleIntegration:
             assert marked == 1
 
             # Verify \Seen is now present.
-            verify = IMAPClient(host, port=port, ssl=True, timeout=30)
+            verify = _connect_imap(host, port, 30)
             verify.login(email, pw)
             try:
-                verify.select_folder(src, readonly=True)
+                verify.select_folder(src_imap, readonly=True)
                 uids = verify.search(["HEADER", "Message-ID", bracketed])
                 assert len(uids) == 1, f"message missing after mark-read: {uids}"
                 flags_after_read = verify.get_flags(uids)
@@ -1642,10 +1674,10 @@ class TestDraftsLifecycleIntegration:
             assert unmarked == 1
 
             # Verify \Seen is now absent.
-            verify = IMAPClient(host, port=port, ssl=True, timeout=30)
+            verify = _connect_imap(host, port, 30)
             verify.login(email, pw)
             try:
-                verify.select_folder(src, readonly=True)
+                verify.select_folder(src_imap, readonly=True)
                 uids = verify.search(["HEADER", "Message-ID", bracketed])
                 flags_after_unread = verify.get_flags(uids)
                 assert b"\\Seen" not in flags_after_unread[uids[0]], (
@@ -1674,8 +1706,7 @@ class TestDraftsLifecycleIntegration:
         from datetime import datetime, timezone
         from email.utils import format_datetime
 
-        from imapclient import IMAPClient
-
+        from apple_mail_mcp.imap_connector import _connect_imap
         from apple_mail_mcp.keychain import get_imap_password
 
         suffix = _uuid.uuid4().hex[:8]
@@ -1700,11 +1731,13 @@ class TestDraftsLifecycleIntegration:
                 f"body\r\n"
             ).encode()
 
-            append_client = IMAPClient(host, port=port, ssl=True, timeout=30)
+            append_client = _connect_imap(host, port, 30)
             append_client.login(email, pw)
             try:
+                # Two names for one mailbox: see server_folder_name.
+                src_imap = server_folder_name(append_client, src)
                 # Explicitly NO flags at start.
-                append_client.append(src, raw, flags=[])
+                append_client.append(src_imap, raw, flags=[])
             finally:
                 append_client.logout()
 
@@ -1718,10 +1751,10 @@ class TestDraftsLifecycleIntegration:
             assert marked == 1
 
             # Verify \Flagged is now present.
-            verify = IMAPClient(host, port=port, ssl=True, timeout=30)
+            verify = _connect_imap(host, port, 30)
             verify.login(email, pw)
             try:
-                verify.select_folder(src, readonly=True)
+                verify.select_folder(src_imap, readonly=True)
                 uids = verify.search(["HEADER", "Message-ID", bracketed])
                 assert len(uids) == 1
                 flags_after_set = verify.get_flags(uids)
@@ -1741,10 +1774,10 @@ class TestDraftsLifecycleIntegration:
             assert unmarked == 1
 
             # Verify \Flagged is now absent.
-            verify = IMAPClient(host, port=port, ssl=True, timeout=30)
+            verify = _connect_imap(host, port, 30)
             verify.login(email, pw)
             try:
-                verify.select_folder(src, readonly=True)
+                verify.select_folder(src_imap, readonly=True)
                 uids = verify.search(["HEADER", "Message-ID", bracketed])
                 flags_after_clear = verify.get_flags(uids)
                 assert b"\\Flagged" not in flags_after_clear[uids[0]], (
@@ -1774,8 +1807,7 @@ class TestDraftsLifecycleIntegration:
         from datetime import datetime, timezone
         from email.utils import format_datetime
 
-        from imapclient import IMAPClient
-
+        from apple_mail_mcp.imap_connector import _connect_imap
         from apple_mail_mcp.keychain import get_imap_password
 
         suffix = _uuid.uuid4().hex[:8]
@@ -1790,7 +1822,7 @@ class TestDraftsLifecycleIntegration:
         assert connector.create_mailbox(account=test_account, name=src)
         try:
             now = format_datetime(datetime.now(tz=timezone.utc))
-            append_client = IMAPClient(host, port=port, ssl=True, timeout=30)
+            append_client = _connect_imap(host, port, 30)
             append_client.login(email, pw)
             try:
                 for mid in ids_local:
@@ -1802,7 +1834,9 @@ class TestDraftsLifecycleIntegration:
                         f"Message-ID: <{mid}>\r\n"
                         f"\r\nbody\r\n"
                     ).encode()
-                    append_client.append(src, raw, flags=[])
+                    # Two names for one mailbox: see server_folder_name.
+                    src_imap = server_folder_name(append_client, src)
+                    append_client.append(src_imap, raw, flags=[])
             finally:
                 append_client.logout()
 
@@ -1813,10 +1847,10 @@ class TestDraftsLifecycleIntegration:
             )
             assert marked == 2
 
-            verify = IMAPClient(host, port=port, ssl=True, timeout=30)
+            verify = _connect_imap(host, port, 30)
             verify.login(email, pw)
             try:
-                verify.select_folder(src, readonly=True)
+                verify.select_folder(src_imap, readonly=True)
                 for mid in ids_local:
                     uids = verify.search(["HEADER", "Message-ID", f"<{mid}>"])
                     assert len(uids) == 1
@@ -1846,8 +1880,7 @@ class TestDraftsLifecycleIntegration:
         from datetime import datetime, timezone
         from email.utils import format_datetime
 
-        from imapclient import IMAPClient
-
+        from apple_mail_mcp.imap_connector import _connect_imap
         from apple_mail_mcp.keychain import get_imap_password
 
         suffix = _uuid.uuid4().hex[:8]
@@ -1872,10 +1905,14 @@ class TestDraftsLifecycleIntegration:
                 f"body\r\n"
             ).encode()
 
-            append_client = IMAPClient(host, port=port, ssl=True, timeout=30)
+            append_client = _connect_imap(host, port, 30)
             append_client.login(email, pw)
             try:
-                append_client.append(src, raw, flags=[])
+                # Two names for one mailbox: Mail.app knows it as `src`, the
+                # server may store it under a namespace prefix. Direct IMAP
+                # calls need the server name, the connector needs Mail's.
+                src_imap = server_folder_name(append_client, src)
+                append_client.append(src_imap, raw, flags=[])
             finally:
                 append_client.logout()
 
@@ -1944,8 +1981,7 @@ class TestDraftsLifecycleIntegration:
         from datetime import datetime, timezone
         from email.utils import format_datetime
 
-        from imapclient import IMAPClient
-
+        from apple_mail_mcp.imap_connector import _connect_imap
         from apple_mail_mcp.keychain import get_imap_password
 
         suffix = _uuid.uuid4().hex[:8]
@@ -1969,10 +2005,14 @@ class TestDraftsLifecycleIntegration:
                 f"body\r\n"
             ).encode()
 
-            append_client = IMAPClient(host, port=port, ssl=True, timeout=30)
+            append_client = _connect_imap(host, port, 30)
             append_client.login(email, pw)
             try:
-                append_client.append(src, raw, flags=[])
+                # Two names for one mailbox: Mail.app knows it as `src`, the
+                # server may store it under a namespace prefix. Direct IMAP
+                # calls need the server name, the connector needs Mail's.
+                src_imap = server_folder_name(append_client, src)
+                append_client.append(src_imap, raw, flags=[])
             finally:
                 append_client.logout()
 
