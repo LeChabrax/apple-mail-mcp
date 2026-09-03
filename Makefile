@@ -31,7 +31,12 @@ test-unit:
 	uv run pytest tests/unit/ -q
 
 test-integration:
-	MAIL_TEST_MODE=true uv run pytest tests/integration/ --run-integration -v
+	@# APPLE_MAIL_MCP_TIMEOUT caps each AppleScript call. Without it a stuck
+	@# call holds Mail for 60s, the next test times out too, and the suite
+	@# reports congestion as failures (measured: 7 failures in 13min vs 17
+	@# in 43min, same code).
+	MAIL_TEST_MODE=true APPLE_MAIL_MCP_TIMEOUT=$${APPLE_MAIL_MCP_TIMEOUT:-45} \
+		uv run pytest tests/integration/ --run-integration -v
 
 test-e2e:
 	MAIL_TEST_MODE=true uv run pytest tests/e2e/ -v

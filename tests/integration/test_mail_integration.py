@@ -35,8 +35,24 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture
 def connector() -> AppleMailConnector:
-    """Create a real connector instance."""
-    return AppleMailConnector()
+    """A real connector, with a shorter leash than production.
+
+    The default is 60 s per AppleScript call. Measured 2026-09-03: the same
+    unchanged code produced 7 failures in a 13-minute run and 17 in a
+    43-minute one — 12 of those 17 being timeouts, not assertions. Each stuck
+    call spent its full minute driving Mail.app, which slowed the next test,
+    which then timed out in turn. The verdict tracked the duration of the run
+    rather than the state of the code, which is worse than no verdict.
+
+    A shorter ceiling makes a hang fail fast and locally instead of poisoning
+    everything after it. 45 s, not less: at 20 s the suite cut legitimate work
+    short and reported 25 failures where a full run reports far fewer — a
+    ceiling that is too low invents failures exactly like one that is too high
+    hides them. Override with MAIL_TEST_TIMEOUT.
+    """
+    import os
+
+    return AppleMailConnector(timeout=int(os.getenv("MAIL_TEST_TIMEOUT", "45")))
 
 
 @pytest.fixture

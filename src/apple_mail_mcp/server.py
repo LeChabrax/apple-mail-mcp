@@ -204,7 +204,36 @@ def _attachment_cap_overrides() -> dict[str, int]:
 
 _imap_pool = _build_imap_pool()
 _register_pool_atexit(_imap_pool)
-mail = AppleMailConnector(imap_pool=_imap_pool, **_attachment_cap_overrides())
+def _applescript_timeout() -> int:
+    """Seconds allowed per AppleScript call, overridable.
+
+    60 s suits a normal machine. It is the wrong number in two directions: a
+    stuck call on a busy Mac holds the server for a full minute (measured
+    2026-09-03: enough for one slow test to make the next one time out, and a
+    whole suite to report failures that were really congestion), while an
+    Exchange account on a slow link may legitimately need longer.
+
+    Neither case should require editing the source.
+    """
+    raw = os.getenv("APPLE_MAIL_MCP_TIMEOUT")
+    if raw is None:
+        return 60
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("APPLE_MAIL_MCP_TIMEOUT=%r is not a number; using 60s", raw)
+        return 60
+    if value <= 0:
+        logger.warning("APPLE_MAIL_MCP_TIMEOUT=%s is not positive; using 60s", value)
+        return 60
+    return value
+
+
+mail = AppleMailConnector(
+    imap_pool=_imap_pool,
+    timeout=_applescript_timeout(),
+    **_attachment_cap_overrides(),
+)
 
 
 # Phrase exacte attendue par operation quand le client ne sait pas afficher de
