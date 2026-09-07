@@ -1378,7 +1378,11 @@ class ImapConnector:
         _reject_control_chars(destination_mailbox, "destination_mailbox")
 
         with self._session() as client:
-            client.select_folder(source_mailbox, readonly=False)
+            source_server = self._resolve_server_folder(client, source_mailbox)
+            dest_server = self._resolve_server_folder(
+                client, destination_mailbox
+            )
+            client.select_folder(source_server, readonly=False)
 
             has_move = self._has_capability(client, b"MOVE")
             has_uidplus = self._has_capability(client, b"UIDPLUS")
@@ -1394,9 +1398,9 @@ class ImapConnector:
                 return 0
 
             if has_move:
-                client.move(uids, destination_mailbox)
+                client.move(uids, dest_server)
             else:
-                client.copy(uids, destination_mailbox)
+                client.copy(uids, dest_server)
                 client.add_flags(uids, [b"\\Deleted"], silent=True)
                 client.uid_expunge(uids)
             return len(uids)
@@ -1534,7 +1538,8 @@ class ImapConnector:
                     f"present in the folder listing"
                 )
 
-            client.select_folder(source_mailbox, readonly=False)
+            source_server = self._resolve_server_folder(client, source_mailbox)
+            client.select_folder(source_server, readonly=False)
 
             uids = self._resolve_uids_batch(client, message_ids)
             if not uids:
@@ -1582,7 +1587,8 @@ class ImapConnector:
         _reject_control_chars(source_mailbox, "source_mailbox")
 
         with self._session() as client:
-            client.select_folder(source_mailbox, readonly=False)
+            source_server = self._resolve_server_folder(client, source_mailbox)
+            client.select_folder(source_server, readonly=False)
 
             uids = self._resolve_uids_batch(client, message_ids)
             if not uids:
@@ -1636,7 +1642,8 @@ class ImapConnector:
         _reject_control_chars(source_mailbox, "source_mailbox")
 
         with self._session() as client:
-            client.select_folder(source_mailbox, readonly=False)
+            source_server = self._resolve_server_folder(client, source_mailbox)
+            client.select_folder(source_server, readonly=False)
 
             uids = self._resolve_uids_batch(client, message_ids)
             if not uids:
@@ -1684,6 +1691,43 @@ class ImapConnector:
         return None
 
     @staticmethod
+    def _resolve_server_folder(client: IMAPClient, mailbox: str) -> str:
+        """Map a caller-facing (Mail.app) mailbox name to the real server
+        folder name before SELECT.
+
+        Callers only ever hold the name Mail.app shows — the value
+        ``list_mailboxes`` returns and ``search_messages`` was queried
+        with. On some servers that name is not the folder's server path.
+        Measured 2026-09-03 on OVH (ssl0.ovh.net): a mailbox created and
+        shown by Mail.app as ``ZZZ`` is stored server-side as
+        ``INBOX.ZZZ`` because personal mailboxes live under an ``INBOX.``
+        namespace there. Selecting the bare ``ZZZ`` then matches nothing,
+        so a scoped delete/flag/move silently reports zero. Gmail and
+        iCloud use an empty prefix, so the bare name already is the server
+        name and this is a no-op for them.
+
+        Returns the requested name unchanged when it already exists on the
+        server, or when no single namespaced match is found — so a genuine
+        miss surfaces as the caller's own empty result, not a wrong guess.
+        """
+        exact: str | None = None
+        suffix_matches: list[str] = []
+        for _flags, delim, name in client.list_folders():
+            if isinstance(name, (bytes, bytearray)):
+                name = name.decode("utf-8", errors="replace")
+            if name == mailbox:
+                exact = name
+                break
+            d = delim.decode() if isinstance(delim, (bytes, bytearray)) else delim
+            if d and name.endswith(f"{d}{mailbox}"):
+                suffix_matches.append(name)
+        if exact is not None:
+            return exact
+        if len(suffix_matches) == 1:
+            return suffix_matches[0]
+        return mailbox
+
+    @staticmethod
     def _find_trash_folder(client: IMAPClient) -> str | None:
         """Return the Trash folder name via the ``\\Trash`` SPECIAL-USE
         flag (RFC 6154), or None if the server doesn't advertise it.
@@ -1702,16 +1746,30 @@ class ImapConnector:
         """Fall back to a hard-coded list of conventional Trash names
         for servers that don't advertise SPECIAL-USE ``\\Trash`` (#150).
         Scans the folder listing once and returns the first conventional
-        name present, in :attr:`_CONVENTIONAL_TRASH_NAMES` order."""
-        present: set[str] = set()
-        for _flags, _delim, name in client.list_folders():
+        name present, in :attr:`_CONVENTIONAL_TRASH_NAMES` order.
+
+        A conventional name is matched under a server namespace prefix too:
+        OVH (ssl0.ovh.net) stores Trash as ``INBOX.Deleted Messages``, not
+        the bare ``Deleted Messages``, so a bare-only match found no Trash
+        and every scoped delete raised MailImapTrashNotFoundError
+        (measured 2026-09-03). The full server path is returned so the
+        subsequent MOVE/COPY targets the real folder."""
+        present: list[tuple[str, str]] = []  # (server_name, delimiter)
+        for _flags, delim, name in client.list_folders():
             if isinstance(name, (bytes, bytearray)):
-                present.add(name.decode("utf-8", errors="replace"))
-            else:
-                present.add(name)
+                name = name.decode("utf-8", errors="replace")
+            d = delim.decode() if isinstance(delim, (bytes, bytearray)) else delim
+            present.append((name, d or ""))
+        names = {n for n, _ in present}
         for candidate in self._CONVENTIONAL_TRASH_NAMES:
-            if candidate in present:
+            if candidate in names:
                 return candidate
+            # Same candidate under a namespace prefix (e.g. INBOX.<candidate>).
+            namespaced = [
+                n for n, d in present if d and n.endswith(f"{d}{candidate}")
+            ]
+            if len(namespaced) == 1:
+                return namespaced[0]
         return None
 
     @staticmethod

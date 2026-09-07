@@ -303,7 +303,12 @@ class TestMailIntegration:
             pytest.skip("test inbox has no messages")
 
         target_id = matches[0]["id"]
-        result = connector.get_message(target_id)
+        # search_messages returns an RFC Message-ID on the IMAP-delegated
+        # path; get_message resolves it only when handed the same
+        # account+mailbox (its documented contract). (#148)
+        result = connector.get_message(
+            target_id, account=test_account, mailbox="INBOX"
+        )
 
         assert set(result.keys()) >= {
             "id", "subject", "sender", "date_received",
@@ -427,7 +432,9 @@ class TestMailIntegration:
         if not matches:
             pytest.skip("test inbox has no messages")
 
-        result = connector.get_attachments(matches[0]["id"])
+        result = connector.get_attachments(
+            matches[0]["id"], account=test_account, mailbox="INBOX"
+        )
         assert isinstance(result, list)
         for att in result:
             assert set(att.keys()) >= {"name", "mime_type", "size", "downloaded"}
@@ -455,17 +462,28 @@ class TestMailIntegration:
             account=test_account, mailbox="INBOX", limit=10
         )
         target_id = next(
-            (m["id"] for m in matches if connector.get_attachments(m["id"])),
+            (
+                m["id"]
+                for m in matches
+                if connector.get_attachments(
+                    m["id"], account=test_account, mailbox="INBOX"
+                )
+            ),
             None,
         )
         if target_id is None:
             pytest.skip("no INBOX message with attachments to save")
 
         before = {p.resolve() for p in tmp_path.rglob("*")}
-        count = connector.save_attachments(
-            message_id=target_id, save_directory=tmp_path
+        result = connector.save_attachments(
+            message_id=target_id,
+            save_directory=tmp_path,
+            account=test_account,
+            mailbox="INBOX",
         )
-        assert isinstance(count, int)
+        # save_attachments returns {"saved": int, "rejected": [...]}.
+        assert isinstance(result, dict)
+        assert isinstance(result["saved"], int)
 
         written = {p.resolve() for p in tmp_path.rglob("*") if p.is_file()}
         # Every file that appeared is strictly inside the save directory.
@@ -490,9 +508,16 @@ class TestMailIntegration:
         )
         target = next(
             (
-                (m["id"], connector.get_attachments(m["id"]))
+                (
+                    m["id"],
+                    connector.get_attachments(
+                        m["id"], account=test_account, mailbox="INBOX"
+                    ),
+                )
                 for m in matches
-                if connector.get_attachments(m["id"])
+                if connector.get_attachments(
+                    m["id"], account=test_account, mailbox="INBOX"
+                )
             ),
             None,
         )
@@ -500,7 +525,9 @@ class TestMailIntegration:
             pytest.skip("no INBOX message with attachments")
         message_id, meta = target
 
-        result = connector.get_attachment_content(message_id, 0)
+        result = connector.get_attachment_content(
+            message_id, 0, account=test_account, mailbox="INBOX"
+        )
         assert set(result.keys()) >= {"name", "mime_type", "size", "payload"}
         assert isinstance(result["payload"], bytes)
         assert result["size"] == len(result["payload"])
@@ -675,10 +702,15 @@ class TestDraftsLifecycleIntegration:
         return seed_id
 
     def test_fresh_save_then_read_state_then_delete(
-        self, connector: AppleMailConnector
+        self, connector: AppleMailConnector, test_account: str
     ) -> None:
+        # from_account is required to name the draft's account: with several
+        # enabled accounts _resolve_implicit_account returns None and the
+        # AppleScript fallback scans every account's Drafts and returns an
+        # empty id (#321). Name the account so the clean IMAP path engages.
         result = connector.create_draft(
             seed="new",
+            from_account=test_account,
             to=["test1@example.com"],
             cc=["test2@example.com"],
             subject="ZZZ-AMM-INTEG-FRESH",
@@ -882,11 +914,13 @@ class TestDraftsLifecycleIntegration:
     def test_reply_save_preserves_threading_headers(
         self,
         connector: AppleMailConnector,
+        test_account: str,
         anchor_message_id: str,
     ) -> None:
         result = connector.create_draft(
             seed="reply",
             seed_id=anchor_message_id,
+            from_account=test_account,
             body="ZZZ-AMM-INTEG-REPLY-BODY",
         )
         draft_id = result["draft_id"]
@@ -1134,6 +1168,7 @@ class TestDraftsLifecycleIntegration:
     def test_attachment_extraction_round_trip(
         self,
         connector: AppleMailConnector,
+        test_account: str,
         tmp_path: Path,
     ) -> None:
         """Verify the preserve-on-None pipeline works: attach a file,
@@ -1144,6 +1179,7 @@ class TestDraftsLifecycleIntegration:
 
         result = connector.create_draft(
             seed="new",
+            from_account=test_account,
             to=["target@example.com"],
             subject="ZZZ-AMM-INTEG-ATTACH",
             body="see attached",
@@ -1501,7 +1537,7 @@ class TestDraftsLifecycleIntegration:
         from datetime import datetime, timezone
         from email.utils import format_datetime
 
-        from apple_mail_mcp.imap_connector import _connect_imap
+        from apple_mail_mcp.imap_connector import ImapConnector, _connect_imap
         from apple_mail_mcp.keychain import get_imap_password
 
         suffix = _uuid.uuid4().hex[:8]
@@ -1553,30 +1589,15 @@ class TestDraftsLifecycleIntegration:
             verify = _connect_imap(host, port, 30)
             verify.login(email, pw)
             try:
-                trash_name = None
-                conventional = (
-                    "Trash", "[Gmail]/Trash",
-                    "Deleted Messages", "Deleted Items",
+                # Discover Trash exactly as the connector does — including
+                # the namespace-prefixed conventional match (OVH stores it as
+                # INBOX.Deleted Messages). Reusing the connector's own logic
+                # keeps the test honest instead of re-deriving a divergent copy.
+                trash_name = ImapConnector._find_trash_folder(
+                    verify
+                ) or ImapConnector._find_trash_by_convention(
+                    ImapConnector(host, port, email, pw), verify
                 )
-                listing = verify.list_folders()
-                for flags, _delim, name in listing:
-                    if b"\\Trash" in flags:
-                        trash_name = (
-                            name.decode("utf-8", errors="replace")
-                            if isinstance(name, (bytes, bytearray))
-                            else name
-                        )
-                        break
-                if trash_name is None:
-                    present = {
-                        n.decode("utf-8", errors="replace")
-                        if isinstance(n, (bytes, bytearray)) else n
-                        for _f, _d, n in listing
-                    }
-                    for candidate in conventional:
-                        if candidate in present:
-                            trash_name = candidate
-                            break
                 assert trash_name is not None, (
                     "Test account has no discoverable Trash folder"
                 )
