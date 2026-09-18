@@ -26,8 +26,8 @@ if [ "$INIT_VERSION" != "$PYPROJECT_VERSION" ]; then
 fi
 
 # Check CLAUDE.md
-if [ -f ".claude/CLAUDE.md" ]; then
-    CLAUDE_VERSION=$(grep '^\*\*Version:\*\*' .claude/CLAUDE.md | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sed 's/^v//')
+if [ -f "AGENTS.md" ]; then
+    CLAUDE_VERSION=$(grep '^\*\*Version:\*\*' AGENTS.md | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | sed 's/^v//')
     if [ -n "$CLAUDE_VERSION" ]; then
         echo "  CLAUDE.md:      $CLAUDE_VERSION"
         if [ "$CLAUDE_VERSION" != "$PYPROJECT_VERSION" ]; then

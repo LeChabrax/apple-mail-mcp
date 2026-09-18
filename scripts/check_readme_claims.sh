@@ -30,7 +30,7 @@ fi
 # Check 2: CLAUDE.md tool count
 echo ""
 echo "Check 2: CLAUDE.md tool count..."
-CLAUDE_TOOL_CLAIM=$(grep -oE '[0-9]+ MCP tools' .claude/CLAUDE.md 2>/dev/null | grep -oE '[0-9]+' || echo "")
+CLAUDE_TOOL_CLAIM=$(grep -oE '[0-9]+ MCP tools' AGENTS.md 2>/dev/null | grep -oE '[0-9]+' || echo "")
 
 if [ -n "$CLAUDE_TOOL_CLAIM" ]; then
     if [ "$CLAUDE_TOOL_CLAIM" != "$ACTUAL_TOOLS" ]; then
@@ -46,7 +46,7 @@ fi
 # Check 3: CLAUDE.md test count (if present)
 echo ""
 echo "Check 3: Test counts..."
-CLAUDE_TEST_CLAIM=$(grep -oE '[0-9]+ unit' .claude/CLAUDE.md 2>/dev/null | grep -oE '[0-9]+' || echo "")
+CLAUDE_TEST_CLAIM=$(grep -oE '[0-9]+ unit' AGENTS.md 2>/dev/null | grep -oE '[0-9]+' || echo "")
 
 if [ -n "$CLAUDE_TEST_CLAIM" ]; then
     ACTUAL_TESTS=$(uv run pytest tests/unit/ --collect-only -q --no-header 2>/dev/null | tail -1 | grep -oE '[0-9]+ test' | grep -oE '[0-9]+' || echo "unknown")
@@ -63,7 +63,7 @@ echo ""
 if [ $ERRORS -gt 0 ]; then
     echo "FAILED: $ERRORS documentation claim(s) are stale."
     echo ""
-    echo "Fix by updating the numbers in README.md and/or .claude/CLAUDE.md."
+    echo "Fix by updating the numbers in README.md and/or AGENTS.md."
     exit 1
 else
     echo "All documentation claims verified."

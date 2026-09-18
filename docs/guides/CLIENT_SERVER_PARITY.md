@@ -24,7 +24,7 @@ Otherwise it prints `Parity OK: N intentionally-internal method(s), all allowlis
 
 [`scripts/check_client_server_parity.sh`](../../scripts/check_client_server_parity.sh) carries an `ALLOWLIST` dict mapping each intentionally-internal method name to a one-line reason. It's a **shrinking ratchet**: when you expose a previously-internal method as a tool, remove its entry (the stale check enforces this).
 
-These methods are public on the connector but deliberately not tools — they're subsumed by a CRUD-style tool (per the [api-design](../../.claude/skills/api-design/SKILL.md) "no per-field tools" rule) or used only as internal helpers:
+These methods are public on the connector but deliberately not tools — they're subsumed by a CRUD-style tool (per the [api-design](../../.grok/skills/api-design/SKILL.md) "no per-field tools" rule) or used only as internal helpers:
 
 | Method | Why it's internal |
 |---|---|

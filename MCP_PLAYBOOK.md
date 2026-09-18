@@ -111,9 +111,8 @@ All subprocess execution goes through one method (e.g., `_run_applescript(script
 
 ```
 {project-name}/
-├── .claude/
-│   ├── CLAUDE.md                    # Dense reference card
-│   ├── settings.json                # Claude Code permissions
+├── .grok/
+│   ├── hooks/apple-mail.json         # PreToolUse, PostToolUse, SessionStart
 │   ├── commands/
 │   │   └── merge-and-status.md      # Merge + milestone status
 │   └── skills/
@@ -121,6 +120,7 @@ All subprocess execution goes through one method (e.g., `_run_applescript(script
 │       ├── applescript-{domain}/SKILL.md
 │       ├── api-design/SKILL.md
 │       └── integration-testing/SKILL.md
+├── AGENTS.md                         # Dense reference card (etait .claude/CLAUDE.md)
 ├── .github/
 │   ├── dependabot.yml
 │   ├── ISSUE_TEMPLATE/
@@ -345,7 +345,7 @@ Dense, reference-card format optimized for Claude Code's context window:
 
 ### Skill Architecture
 
-Skills live in `.claude/skills/{skill-name}/SKILL.md`. They encode hard-won knowledge that can't be derived from reading the code.
+Skills live in `.grok/skills/{skill-name}/SKILL.md`. They encode hard-won knowledge that can't be derived from reading the code.
 
 **Required skills for every MCP connector:**
 1. **release** — 12-phase release orchestration
@@ -434,7 +434,7 @@ assert br.mean < baseline * 5, f"Regression: {br.mean:.2f}s"
 Version appears in three files (must be synced via `check_version_sync.sh`):
 1. `pyproject.toml` (authoritative source)
 2. `src/{package}/__init__.py`
-3. `.claude/CLAUDE.md`
+3. `AGENTS.md`
 
 ---
 

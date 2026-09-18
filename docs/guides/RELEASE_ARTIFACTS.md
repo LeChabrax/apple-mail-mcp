@@ -1,6 +1,6 @@
 # Release Artifacts
 
-This project ships two **derived artifacts** that must be refreshed each release (Phase 8.5 of the [release skill](../../.claude/skills/release/SKILL.md), #288) but can't be regenerated in CI — they need resources the release driver may not have:
+This project ships two **derived artifacts** that must be refreshed each release (Phase 8.5 of the [release skill](../../.grok/skills/release/SKILL.md), #288) but can't be regenerated in CI — they need resources the release driver may not have:
 
 | Artifact | Needs | Refresh |
 |---|---|---|

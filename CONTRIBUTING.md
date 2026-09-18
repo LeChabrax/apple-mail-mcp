@@ -74,4 +74,4 @@ make test-integration  # Real Mail.app tests
 
 ## Release Process
 
-Releases follow a 12-phase process documented in `.claude/skills/release/SKILL.md`. CHANGELOG is only updated on release branches.
+Releases follow a 12-phase process documented in `.grok/skills/release/SKILL.md`. CHANGELOG is only updated on release branches.

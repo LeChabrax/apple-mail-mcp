@@ -1,7 +1,7 @@
 # Apple Mail AppleScript Gotchas
 
 Known issues, limitations, and workarounds for Apple Mail automation via AppleScript. The
-`applescript-mail` skill (`.claude/skills/applescript-mail/`) is the deeper reference for
+`applescript-mail` skill (`.grok/skills/applescript-mail/`) is the deeper reference for
 contributors writing connector AppleScript.
 
 ## JSON output via ASObjC (not pipe-delimited)
