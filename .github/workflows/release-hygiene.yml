@@ -5,6 +5,12 @@ on:
     tags:
       - 'v*-rc*'
 
+# Une nouvelle poussée annule le run en cours sur la même référence : inutile de payer deux
+# fois pour un état dépassé. Le nom du workflow isole les workflows d'un même dépôt.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   hygiene-checks:
     runs-on: macos-latest
