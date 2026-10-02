@@ -1,8 +1,7 @@
 name: Tests
 
 on:
-  push:
-    branches: [main]
+  # Le merge sur main ne relance pas la suite : ce second run est au même tarif.
   pull_request:
     branches: [main]
 
