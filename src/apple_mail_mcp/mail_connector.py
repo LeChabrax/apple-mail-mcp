@@ -4828,15 +4828,17 @@ class AppleMailConnector:
         for p in attachment_paths:
             if not Path(p).is_file():
                 raise FileNotFoundError(f"attachment not found: {p}")
-        paths_safe = ", ".join(
-            f'"{escape_applescript_string(str(Path(p).resolve()))}"'
-            for p in attachment_paths
-        )
-        return f"""
-            repeat with apath in {{{paths_safe}}}
-                tell theMessage to make new attachment with properties {{file name:(POSIX file apath)}} at after last paragraph
-            end repeat
-        """
+        # Unroll: `repeat with apath in {..}` binds a list *reference*,
+        # and `POSIX file apath` then attaches only the first file
+        # (Mail.app, measured 2026-10-10 on a 3-PDF reply draft).
+        lines = []
+        for p in attachment_paths:
+            path = escape_applescript_string(str(Path(p).resolve()))
+            lines.append(
+                "tell theMessage to make new attachment with properties "
+                f'{{file name:(POSIX file "{path}")}} at after last paragraph'
+            )
+        return "\n            " + "\n            ".join(lines)
 
     @staticmethod
     def _build_creation_block(

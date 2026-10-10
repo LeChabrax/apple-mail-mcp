@@ -6108,6 +6108,8 @@ class TestCreateDraft:
         assert str(f1.resolve()) in script
         assert str(f2.resolve()) in script
         assert "make new attachment" in script
+        assert "repeat with apath" not in script
+        assert script.count("make new attachment") == 2
 
     def test_new_attachment_missing_raises(
         self, connector: AppleMailConnector, tmp_path: Any
